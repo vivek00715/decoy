@@ -1,0 +1,24 @@
+{
+  "_comment": "Copy to .decoy/overrides.json (or set DECOY_OVERRIDES_PATH). Manual overrides always win over automated detection -- always_mask forces masking even if no detector would normally flag it, never_mask skips masking even if a detector would normally flag it.",
+
+  "always_mask": {
+    "patterns": [
+      "EMP-\\d{6}"
+    ],
+    "field_names": [
+      "internal_notes",
+      "employee_id"
+    ]
+  },
+
+  "never_mask": {
+    "patterns": [
+      "support@decoy\\.example\\.com"
+    ],
+    "field_names": [
+      "id",
+      "created_at",
+      "updated_at"
+    ]
+  }
+}
