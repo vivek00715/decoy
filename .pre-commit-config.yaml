@@ -1,0 +1,19 @@
+# Phase 10 CI regression: run the benchmark suite automatically whenever
+# masker.py, record_masker.py, or query_aware.py changes, so a detection-
+# quality regression is caught at commit time, not discovered later by a
+# user. Requires the `pre-commit` tool (https://pre-commit.com/):
+#   pip install pre-commit
+#   pre-commit install
+#
+# A full GitHub Actions CI setup (running this on every push/PR, blocking
+# merge on failure) is explicitly Phase 11's job per the project spec --
+# this file only covers the local pre-commit hook Phase 10 asks for.
+repos:
+  - repo: local
+    hooks:
+      - id: decoy-benchmark-suite
+        name: Decoy benchmark suite (privacy/utility regression check)
+        entry: bash -c 'cd "$(git rev-parse --show-toplevel)" && python -m pytest tests/test_benchmark_suite.py -q'
+        language: system
+        files: ^src/decoy/(masker|record_masker|query_aware)\.py$
+        pass_filenames: false

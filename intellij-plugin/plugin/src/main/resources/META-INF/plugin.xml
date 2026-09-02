@@ -1,0 +1,69 @@
+<idea-plugin>
+    <id>com.decoy.intellij</id>
+    <name>Decoy</name>
+    <vendor email="decoy-local@example.invalid" url="https://example.invalid/decoy">Decoy (local project)</vendor>
+
+    <description><![CDATA[
+        Decoy masks PII it detects (via regex/NER, manual overrides, and shape-based rules)
+        before it reaches an LLM, and unmasks the response. It does not guarantee protection
+        against re-identification from surrounding context, and automated relevance
+        classification is imperfect -- that's why manual overrides exist. All audit/session
+        data is stored locally only, and you can clear it any time from the Decoy tool window.
+    ]]></description>
+
+    <depends>com.intellij.modules.platform</depends>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <!-- No `icon` attribute: a custom tool window icon needs a
+             correctly-sized/formatted SVG (13x13, specific color
+             conventions) that could not be verified without a real IDE
+             to render it in. Omitting it falls back to the Platform's
+             default tool window icon -- functional, just not branded. -->
+        <toolWindow id="Decoy"
+                    anchor="right"
+                    factoryClass="com.decoy.plugin.DecoyToolWindowFactory"/>
+
+        <postStartupActivity implementation="com.decoy.plugin.DecoyFirstRunActivity"/>
+
+        <!-- No `key` attribute: that would look up a display name from a
+             resource bundle, which this plugin doesn't define. Without it,
+             the Platform uses `id` directly as the display name in the
+             Notifications settings UI -- unverified against a real IDE. -->
+        <notificationGroup id="Decoy Notifications" displayType="STICKY_BALLOON"/>
+    </extensions>
+
+    <actions>
+        <group id="Decoy.ToolbarActions" text="Decoy" popup="false">
+            <action id="Decoy.Refresh"
+                    class="com.decoy.plugin.RefreshAction"
+                    text="Refresh"
+                    description="Reload the audit trail and overrides from disk"
+                    icon="AllIcons.Actions.Refresh"/>
+            <action id="Decoy.ClearSessionDataOnly"
+                    class="com.decoy.plugin.ClearSessionDataOnlyAction"
+                    text="Clear Session Data Only"
+                    description="Removes the audit trail and vault mappings for every session. Keeps your configured overrides."/>
+            <action id="Decoy.ClearAll"
+                    class="com.decoy.plugin.ClearAllAction"
+                    text="Clear All Local Data (Including Overrides)"
+                    description="Removes EVERYTHING: audit trail, vault mappings, AND your configured overrides."/>
+            <separator/>
+            <action id="Decoy.AddAlwaysMaskField"
+                    class="com.decoy.plugin.AddAlwaysMaskFieldAction"
+                    text="Add Always-Mask Field"
+                    description="Add a field name that should always be masked, regardless of automated classification"/>
+            <action id="Decoy.AddNeverMaskField"
+                    class="com.decoy.plugin.AddNeverMaskFieldAction"
+                    text="Add Never-Mask Field"
+                    description="Add a field name that should never be masked, regardless of automated classification"/>
+            <action id="Decoy.AddAlwaysMaskPattern"
+                    class="com.decoy.plugin.AddAlwaysMaskPatternAction"
+                    text="Add Always-Mask Pattern"
+                    description="Add a regex pattern that should always be masked, regardless of automated classification"/>
+            <action id="Decoy.AddNeverMaskPattern"
+                    class="com.decoy.plugin.AddNeverMaskPatternAction"
+                    text="Add Never-Mask Pattern"
+                    description="Add a regex pattern that should never be masked, regardless of automated classification"/>
+        </group>
+    </actions>
+</idea-plugin>

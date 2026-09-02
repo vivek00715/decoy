@@ -1,0 +1,29 @@
+[project]
+name = "decoy"
+version = "0.1.0"
+description = "A privacy-masking layer for LLM pipelines: masks PII in prompts and database values before they reach any LLM, with a local audit trail and IDE controls."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+dependencies = [
+    "faker==30.8.2",
+    "sqlalchemy==2.0.36",
+    "pyyaml==6.0.2",
+    "cryptography==50.0.0",
+]
+
+[project.optional-dependencies]
+ner = ["presidio-analyzer==2.2.357"]
+mcp = ["mcp==2.1.1", "anyio==4.14.2"]
+llm = ["anthropic==0.40.0"]
+dev = ["pytest==8.3.3", "pip-audit==2.7.3"]
+
+[project.scripts]
+decoy = "decoy.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]

@@ -1,0 +1,10 @@
+{
+  "always_mask": {
+    "patterns": ["EMP-\\d{6}"],
+    "field_names": []
+  },
+  "never_mask": {
+    "patterns": ["support@decoy\\.example\\.com"],
+    "field_names": []
+  }
+}

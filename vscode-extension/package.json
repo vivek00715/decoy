@@ -1,0 +1,78 @@
+{
+  "name": "decoy",
+  "displayName": "Decoy",
+  "description": "See and control what Decoy masks, redacts, or leaves untouched before it reaches an LLM.",
+  "version": "0.1.0",
+  "publisher": "decoy-local",
+  "license": "Apache-2.0",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": ["Other"],
+  "activationEvents": ["onStartupFinished"],
+  "main": "./out/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "decoy",
+          "title": "Decoy",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "decoy": [
+        {
+          "id": "decoy.tracePanel",
+          "name": "Masking Trace",
+          "type": "webview"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "decoy.clearSession",
+        "title": "Decoy: Clear This Session"
+      },
+      {
+        "command": "decoy.clearSessionDataOnly",
+        "title": "Decoy: Clear Session Data Only (keeps overrides)"
+      },
+      {
+        "command": "decoy.clearAll",
+        "title": "Decoy: Clear All Local Data (including overrides)"
+      },
+      {
+        "command": "decoy.refresh",
+        "title": "Decoy: Refresh Trace Panel"
+      },
+      {
+        "command": "decoy.showFirstRunNotice",
+        "title": "Decoy: Show Privacy Notice"
+      }
+    ]
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "lint": "eslint src --ext .ts",
+    "test": "jest",
+    "pretest": "npm run compile"
+  },
+  "devDependencies": {
+    "@types/fernet": "0.4.3",
+    "@types/jest": "29.5.14",
+    "@types/node": "20.19.9",
+    "@types/vscode": "1.90.0",
+    "@typescript-eslint/eslint-plugin": "8.68.0",
+    "@typescript-eslint/parser": "8.68.0",
+    "eslint": "9.39.1",
+    "jest": "29.7.0",
+    "ts-jest": "29.4.12",
+    "typescript": "5.7.2"
+  },
+  "dependencies": {
+    "fernet": "0.3.3"
+  }
+}

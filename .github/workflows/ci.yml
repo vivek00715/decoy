@@ -1,0 +1,78 @@
+# CI for Decoy. Written and reviewed but NOT verified against a real
+# GitHub Actions run -- this repository has no remote and no commits yet
+# as of this writing, so there has been no push to actually trigger it.
+# Before relying on this, push to a real GitHub repo and confirm all
+# three jobs go green; treat a first real run as a verification step in
+# its own right, not a formality.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  python:
+    name: Python (tests, benchmark suite, dependency scan)
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install package + dev/llm/mcp extras
+        run: pip install -e ".[dev,llm,mcp]"
+      - name: Run test suite
+        run: python -m pytest tests/ -v
+      - name: Run benchmark suite explicitly
+        # Also covered by the full `pytest tests/` run above -- run again
+        # standalone so a benchmark-suite-specific failure is unambiguous
+        # in the Actions UI rather than buried in the full test log.
+        run: python -m pytest tests/test_benchmark_suite.py -v
+      - name: Dependency vulnerability scan
+        run: |
+          pip install pip-audit
+          pip-audit
+
+  vscode-extension:
+    name: VS Code extension (compile, lint, tests, dependency scan)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: vscode-extension
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - run: npm install
+      - run: npm run compile
+      - run: npm run lint
+      - run: npm test
+      - run: npm audit
+
+  intellij-plugin-core:
+    name: IntelliJ plugin core module (pure Kotlin, no SDK download)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: intellij-plugin
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "17"
+      - name: Run core module tests
+        run: ./gradlew :core:test --console=plain
+      # The `plugin` module (IntelliJ Platform SDK wiring) is deliberately
+      # NOT built here -- it requires downloading a full IDE distribution,
+      # and was never compiled in the environment that authored it either.
+      # If/when that changes, add a separate job:
+      #   - run: ./gradlew :plugin:buildPlugin --console=plain
+      # and treat its first green run as real verification, not a rerun
+      # of something already known to work.

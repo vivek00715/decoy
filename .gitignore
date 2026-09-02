@@ -1,0 +1,17 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.env
+.decoy/vault.key
+.decoy/*.local.json
+.decoy/audit.log*
+node_modules/
+dist/
+out/
+build/
+*.class
+.gradle/
+.idea/
