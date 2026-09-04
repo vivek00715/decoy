@@ -224,6 +224,47 @@ through Decoy's own code.
    controls the host, not something `decoy-proxy` can do from its
    position in the pipeline.
 
+3a. **`decoy-chat-proxy` forwarding to the real LLM API** — this is the
+   fix for the gap named directly above in item 3: a chat-completions
+   proxy (`decoy.chat_proxy`, run via `decoy chat-proxy`) sits in front
+   of the real Anthropic/OpenAI API itself, not in front of an MCP tool
+   provider, so it sees the actual conversational prompt before any host
+   application's own LLM call — the thing item 3 states plainly that
+   `decoy-proxy` architecturally cannot see. Point `ANTHROPIC_BASE_URL`
+   (or `OPENAI_BASE_URL`) at it instead of the real provider. Sends: the
+   masked request body (system + all message text, masked via the same
+   `masker.py` layer as everything else). Goes to: the real
+   Anthropic/OpenAI API, using an API key read from the PROXY's own
+   environment (`ANTHROPIC_API_KEY`/`OPENAI_API_KEY`) — never accepted
+   from or logged from the client request. The response is unmasked
+   (fake → real) before being returned to the client, including
+   streaming responses (see `decoy.chat_proxy`'s `StreamUnmaskBuffer` for
+   how a fake value split across two streamed chunks is still correctly
+   reassembled before being unmasked, rather than risking either half
+   leaking through un-reversed).
+
+   **This still requires the host application to actually be configured
+   to send its traffic through this proxy** (`ANTHROPIC_BASE_URL`/
+   `OPENAI_BASE_URL` set correctly) — a host that talks to the real
+   provider directly, or via some other configured base URL, still
+   bypasses Decoy entirely, for the same fundamental reason item 3
+   describes: Decoy can only mask traffic that is actually routed through
+   it.
+
+   **Vault sharing with `decoy-proxy` (item 3) is opt-in and manual, not
+   automatic** — they are separate OS processes (this proxy is a
+   long-running daemon; `decoy-proxy` is a stdio subprocess Claude Code
+   itself spawns), so they only share one vault if you set
+   `DECOY_VAULT_PERSIST=true` on both AND coordinate the same session id
+   between them. See the README's "Chat proxy" section for the exact
+   mechanism and `decoy.vault`'s module docstring for two real
+   cross-process data-loss bugs (a lost-update save race, and a race that
+   could mint two different fakes for the same real value) that had to be
+   found and fixed before this sharing was actually safe — both are now
+   covered by real multi-process regression tests
+   (`tests/test_vault_cross_process.py`, `tests/test_audit_log_cross_process.py`),
+   not just unit tests of the merge logic in isolation.
+
 4. **Benchmark suite judge calls** (`benchmark.py`'s `judge_call`) — only
    when you supply a real judge function wired to a real LLM client, used
    solely to compute Utility Score for the benchmark report. Never runs
@@ -232,7 +273,11 @@ through Decoy's own code.
 **No other network calls exist in this codebase.** The vault, audit log,
 and override store are local files only (`.decoy/`), encrypted at rest
 where noted in `AUDIT_LOG_FORMAT.md`. Neither IDE extension calls out to
-anything beyond reading/writing those same local files.
+anything beyond reading/writing those same local files. `decoy-chat-proxy`
+(item 3a) has no authentication of its own on the local port it listens
+on — it is meant for localhost use and trusts any local process that can
+reach it, the same trust model as any other local dev proxy; this is a
+stated design boundary, not an oversight.
 
 ## 5a. Standalone `decoy-proxy` binary: a packaging change, not a masking change
 

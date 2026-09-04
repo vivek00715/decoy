@@ -85,6 +85,16 @@ def _cmd_proxy(args: argparse.Namespace) -> int:
     return proxy_main(proxy_argv)
 
 
+def _cmd_chat_proxy(args: argparse.Namespace) -> int:
+    """Run the chat-completions masking proxy (decoy.chat_proxy). Imported
+    lazily so `decoy version`/`audit`/`overrides`/`proxy` don't require
+    the `chat-proxy` extra to be installed -- only `decoy chat-proxy` does.
+    """
+    from .chat_proxy import main as chat_proxy_main
+
+    return chat_proxy_main(["--host", args.host, "--port", str(args.port)])
+
+
 def _cmd_overrides_show(_args: argparse.Namespace) -> int:
     store = get_default_store()
     rules = store.rules()
@@ -142,6 +152,23 @@ def build_parser() -> argparse.ArgumentParser:
         "target_args", nargs=argparse.REMAINDER, help="arguments passed through to the target MCP server"
     )
     proxy.set_defaults(func=_cmd_proxy)
+
+    chat_proxy = subparsers.add_parser(
+        "chat-proxy",
+        help="run the chat-completions masking proxy in front of a real LLM API (requires the `chat-proxy` extra)",
+        description=(
+            "Runs a local HTTP proxy exposing Anthropic's /v1/messages and OpenAI's "
+            "/v1/chat/completions shapes: masks outgoing message text, forwards to the real "
+            "provider using a server-side API key (ANTHROPIC_API_KEY/OPENAI_API_KEY -- never "
+            "read from the client request), and unmasks the response. Point ANTHROPIC_BASE_URL "
+            "or OPENAI_BASE_URL at this proxy instead of the real provider. See "
+            "decoy.chat_proxy's module docstring for session-id coordination with `decoy proxy` "
+            "and the DECOY_VAULT_PERSIST requirement to share one vault across both."
+        ),
+    )
+    chat_proxy.add_argument("--host", default="127.0.0.1")
+    chat_proxy.add_argument("--port", type=int, default=8787)
+    chat_proxy.set_defaults(func=_cmd_chat_proxy)
 
     overrides = subparsers.add_parser("overrides", help="inspect the local overrides file")
     overrides_sub = overrides.add_subparsers(dest="overrides_command", required=True)

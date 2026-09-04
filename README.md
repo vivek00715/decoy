@@ -19,9 +19,9 @@ in this project, including there.
 
 | Component | Language | Status |
 |---|---|---|
-| `src/decoy/` — core masking engine, CLI, benchmark suite | Python | Built and tested: 87 tests passing |
+| `src/decoy/` — core masking engine, CLI, chat proxy, benchmark suite | Python | Built and tested: 108 tests passing (includes real multi-process regression tests for the vault/audit-log cross-process fixes, and real HTTP-level tests of the chat proxy) |
 | `vscode-extension/` — masking trace panel, override editor | TypeScript | Built and tested: 39 tests passing. Extension-host wiring (webview rendering, real VS Code API calls) requires manual verification — see `vscode-extension/MANUAL_TEST.md` |
-| `intellij-plugin/` — masking trace tool window, override editor | Kotlin | `core/` module built and tested: 57 tests passing. `plugin/` module (IntelliJ Platform SDK wiring) has **never been compiled** in the environment that wrote it — see `intellij-plugin/MANUAL_TEST.md` |
+| `intellij-plugin/` — masking trace tool window, override editor | Kotlin | `core/` module built and tested: 89 tests passing. `plugin/` module now compiles and packages against a real IntelliJ Platform SDK (`./gradlew :plugin:buildPlugin` succeeds) — no real GUI session has been run yet, though; see `intellij-plugin/MANUAL_TEST.md` for what's still unverified |
 
 183 automated tests across all three, all independently re-run and
 confirmed passing as of this writing — see each component's own test
@@ -87,6 +87,87 @@ directly and can write the `.mcp.json` entry above for you — see
 Proxy (Claude Code)" in the IntelliJ plugin's Decoy toolbar. No manual
 download/checksum steps needed in that path since the binary ships with
 the extension/plugin itself.
+
+## Chat proxy: masking free text typed directly into a chat interface
+
+`decoy proxy` (above) only covers data flowing through MCP tool calls.
+`decoy chat-proxy` closes the other gap: text typed directly into a chat
+interface (Claude Code's own prompt, or any OpenAI-SDK-based tool) never
+went through any masking layer before this existed. It's a local HTTP
+proxy exposing Anthropic's `/v1/messages` and OpenAI's
+`/v1/chat/completions` shapes (both streaming and non-streaming): masks
+outgoing message text, forwards to the real provider using a
+server-side-only API key (`ANTHROPIC_API_KEY`/`OPENAI_API_KEY` — read
+from the proxy's own environment, never from the client request), and
+unmasks the response before returning it.
+
+```bash
+pip install -e ".[chat-proxy]"
+ANTHROPIC_API_KEY=sk-ant-... decoy chat-proxy --port 8787
+# then point Claude Code at it:
+ANTHROPIC_BASE_URL=http://127.0.0.1:8787 claude
+```
+
+**Shares one vault with `decoy proxy`, not a separate one** — but only if
+you opt in and coordinate two things yourself, neither of which happens
+automatically:
+
+- `DECOY_VAULT_PERSIST=true` on BOTH processes, pointed at the same
+  `.decoy/` directory (they're separate OS processes; this is the only
+  cross-process sharing mechanism — see `decoy.vault`'s module docstring
+  for the two dormant cross-process races this required fixing first,
+  now covered by real multi-process regression tests).
+- The SAME session id on both sides: `decoy proxy --session <id>` and
+  either the chat proxy's `DECOY_SESSION_ID` env var or an
+  `X-Decoy-Session-Id` request header set to the same `<id>`. There is no
+  automatic way to correlate a chat-completions request with a specific
+  MCP proxy invocation — this is a manual coordination step, stated
+  plainly rather than implied automatic.
+
+Without both of the above, the chat proxy still works, but its vault is
+private to that process and will diverge from `decoy proxy`'s.
+
+This proxy has no authentication of its own — see `decoy.chat_proxy`'s
+module docstring for that trust boundary stated precisely (it's meant
+for localhost use, same trust model as any other local dev proxy).
+
+### Verifying `filelock` on Windows
+
+The cross-process safety this section depends on (`DECOY_VAULT_PERSIST`
+sharing one vault/audit-log/key file between `decoy proxy` and `decoy
+chat-proxy`) is guarded by `filelock`, which wraps `msvcrt` on Windows
+and `fcntl` on POSIX. **This has only ever been exercised on macOS/POSIX
+in the environment that wrote it — the Windows (`msvcrt`) path has never
+actually been run.** This is stated plainly rather than assumed to work
+because `filelock` "supports Windows" per its own documentation; nothing
+in this repo has independently confirmed that on a real Windows machine,
+and this project's own real target machine for its end-to-end test is
+Windows.
+
+If you're on Windows, run this before trusting any of the above — it's
+the exact same real-multi-process concurrency repro used to find and fix
+the three races these locks close (a vault mint race, an audit-log save
+race, and a key-creation race), just run against your own OS:
+
+```powershell
+git clone <this-repo-url>
+cd decoy
+python -m venv .venv
+.venv\Scripts\Activate.ps1
+pip install -e ".[dev]"
+python -m pytest tests/test_vault_cross_process.py tests/test_audit_log_cross_process.py tests/test_crypto_key_cross_process.py -v
+```
+
+**Expected: all 4 tests pass.** Each one spawns 10-12 real separate
+`python` subprocesses (not threads) racing to mutate/create the same
+file, and asserts they converge on one consistent result instead of
+losing or diverging data — see each test file's own docstring for
+exactly what would print if `filelock` behaved differently on Windows
+(e.g. a `unique_fakes`/`unique_keys` count greater than 1, or a missing
+entry in the audit log's recovered set). If any of the three fail here
+specifically (and they don't fail on macOS/Linux), that is a genuine,
+actionable finding about `filelock`'s Windows behavior in this
+environment, not a flake — please report the exact assertion output.
 
 ## Quick start (Python library + CLI)
 

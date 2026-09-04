@@ -10,12 +10,28 @@ dependencies = [
     "sqlalchemy==2.0.36",
     "pyyaml==6.0.2",
     "cryptography==50.0.0",
+    # Cross-platform (Windows/POSIX) file locking for VaultManager's
+    # on-disk persistence -- needed as soon as more than one process can
+    # share a persisted vault (Phase "chat proxy"), which is core
+    # behavior, not an optional extra. `fcntl` (POSIX-only) was
+    # considered and rejected: it fails to import at all on Windows,
+    # which is a real target platform for this project.
+    "filelock==3.25.2",
 ]
 
 [project.optional-dependencies]
 ner = ["presidio-analyzer==2.2.357"]
 mcp = ["mcp==2.1.1", "anyio==4.14.2"]
 llm = ["anthropic==0.40.0"]
+# HTTP framework for the chat-completions masking proxy (Anthropic
+# /v1/messages + OpenAI /v1/chat/completions shapes) -- kept out of core
+# deps since most Decoy usage (IDE extensions, MCP proxy, direct library
+# use) never needs an HTTP server at all.
+# starlette pinned to 1.6.0, not the 0.48.0 first tried here: pip-audit
+# flagged several CVEs (PYSEC-2026-161/249/248/1942/2281/2280) against
+# 0.48.0, all fixed only at 1.0.1+ -- caught before this ever shipped,
+# not after.
+chat-proxy = ["starlette==1.6.0", "uvicorn==0.38.0", "httpx==0.28.1"]
 dev = ["pytest==8.3.3", "pip-audit==2.7.3"]
 # Separate from `dev`: pyinstaller is only needed to produce the
 # standalone `decoy-proxy` binary (scripts/build_binary.py), not for
