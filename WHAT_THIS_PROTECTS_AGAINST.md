@@ -234,6 +234,48 @@ and override store are local files only (`.decoy/`), encrypted at rest
 where noted in `AUDIT_LOG_FORMAT.md`. Neither IDE extension calls out to
 anything beyond reading/writing those same local files.
 
+## 5a. Standalone `decoy-proxy` binary: a packaging change, not a masking change
+
+`decoy-proxy` — the same MCP proxy described in §5.3, with the same
+network-call behavior described there — is also distributed as a
+prebuilt, standalone binary attached to tagged GitHub Releases, as an
+alternative to `pip install decoy`. The binary bundles a Python
+interpreter and this project's pinned dependencies inside it so it runs
+without a separately installed Python, pip, or venv.
+
+**What this does not change:** none of it. The binary runs the exact
+same `decoy-proxy` code described in §5.3 — same masking logic, same
+vault, same unmasking-of-matched-outgoing-arguments behavior, same
+residual limitations, same "conversation never passes through the MCP
+server" gap. Packaging the interpreter alongside the code changes how
+you obtain and run the process; it sends nothing anywhere that the
+`pip install`-run process didn't already send, and closes none of the
+gaps named in §5.3.
+
+**What this adds, named plainly:** a supply-chain risk that doesn't
+exist when you install from source or from a package index with its own
+signing/provenance chain. A downloaded binary is an opaque artifact —
+running one you haven't verified means trusting that the bytes you
+received are actually what the release process built, not something
+substituted in transit or by a compromised mirror. Mitigate this by
+verifying the published SHA-256 checksum for your platform's binary
+against the one on the release page *before* running it, every time you
+download a new version. This document does not claim checksum
+verification eliminates the risk (a compromised release pipeline could
+publish a matching checksum for a compromised binary) — only that
+skipping verification accepts a risk that verification meaningfully
+reduces.
+
+**Bundled into both IDE extensions:** the VS Code extension and the
+IntelliJ plugin now ship these same platform binaries directly and can
+write the `.mcp.json` entry pointing at the bundled copy for you (an
+explicit, confirmed action — it never runs without you triggering it and
+reviewing the exact entry first). This sidesteps the download/checksum
+step above entirely, since the binary arrives as part of the
+already-installed, already-trusted extension/plugin rather than a
+separate download; it does not change any of the masking behavior
+described above or in §5.3.
+
 ## 6. Clearing data: what "Clear Session Data Only" and "Clear All" actually do
 
 Both IDE extensions expose two distinct destructive actions, deliberately

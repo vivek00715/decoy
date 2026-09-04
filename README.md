@@ -51,6 +51,43 @@ still needs a real IDE to verify.
 - **No absolute claims** — nowhere in this codebase, this documentation,
   or either IDE's UI.
 
+## Installing the MCP proxy: standalone binary (no Python required)
+
+If the only thing you need is `decoy-proxy` — the MCP server that sits
+between an MCP client (e.g. Claude Code) and a real target MCP server,
+masking results in transit — you don't need Python, pip, or a venv at
+all. Prebuilt `decoy-proxy` binaries are attached to each tagged
+[GitHub Release](../../releases), one per platform (Windows/macOS/Linux):
+
+```bash
+# 1. Download the binary matching your OS/arch from the release's assets,
+#    e.g. decoy-proxy-<version>-<platform>(.exe)
+
+# 2. Verify it before running it. Always check the downloaded binary's
+#    SHA-256 checksum against the value published alongside it on the
+#    release page — running an unverified downloaded binary is a
+#    supply-chain risk. Example (macOS/Linux):
+shasum -a 256 decoy-proxy-<version>-<platform>
+#    ...and compare the output to the published checksum by hand.
+
+# 3. Point your MCP client's config at the binary directly, e.g. in
+#    Claude Code's MCP server settings, set `command` to the full path
+#    of the downloaded (and verified) decoy-proxy binary instead of a
+#    `python`/`pip`-installed entry point.
+```
+
+This path only covers `decoy-proxy` as a standalone MCP server process.
+It does not give you the `decoy` Python library or CLI described below —
+if you want to `import decoy` in your own code, or use `decoy audit` /
+`decoy overrides` locally, install the Python package instead.
+
+Both the VS Code extension and the IntelliJ plugin bundle these binaries
+directly and can write the `.mcp.json` entry above for you — see
+`decoy.configureMcpProxy` in the VS Code extension or "Configure MCP
+Proxy (Claude Code)" in the IntelliJ plugin's Decoy toolbar. No manual
+download/checksum steps needed in that path since the binary ships with
+the extension/plugin itself.
+
 ## Quick start (Python library + CLI)
 
 ```bash
@@ -78,7 +115,9 @@ Optional extras: `pip install -e ".[llm]"` (Anthropic SDK, for
 LLM-assisted relevance classification or answering questions for real),
 `pip install -e ".[mcp]"` (the MCP masking proxy), `pip install -e ".[ner]"`
 (Presidio — the NER backend interface exists but has no wired
-implementation shipped yet).
+implementation shipped yet). This `pip install` path pulls in Python and
+these dependencies as usual — it is not a zero-dependency install; only
+the standalone binary above avoids needing a Python interpreter at all.
 
 ## Running the tests / dependency scans yourself
 

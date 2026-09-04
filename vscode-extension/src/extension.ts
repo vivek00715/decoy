@@ -2,6 +2,7 @@ import * as crypto from "crypto";
 import * as vscode from "vscode";
 
 import { groupByRequest, readAuditLog } from "./auditLog";
+import { runConfigureMcpProxy } from "./mcpConfigCommand";
 import { PanelController, PanelHost, WebviewMessage } from "./panelController";
 
 const FIRST_RUN_NOTICE_KEY = "decoy.firstRunNoticeShown";
@@ -27,16 +28,27 @@ function getWorkspaceRoot(): string | undefined {
 class DecoyViewProvider implements vscode.WebviewViewProvider {
   private controller: PanelController | undefined;
 
-  constructor(private readonly statusBarItem: vscode.StatusBarItem) {}
+  constructor(
+    private readonly statusBarItem: vscode.StatusBarItem,
+    private readonly extensionUri: vscode.Uri,
+  ) {}
 
   resolveWebviewView(webviewView: vscode.WebviewView): void {
-    webviewView.webview.options = { enableScripts: true };
+    const codiconsRoot = vscode.Uri.joinPath(this.extensionUri, "media", "codicons");
+    webviewView.webview.options = {
+      enableScripts: true,
+      localResourceRoots: [codiconsRoot],
+    };
+    const codiconsUri = webviewView.webview
+      .asWebviewUri(vscode.Uri.joinPath(codiconsRoot, "codicon.css"))
+      .toString();
 
     const host: PanelHost = {
       get rootDir() {
         return getWorkspaceRoot() ?? "";
       },
       cspSource: webviewView.webview.cspSource,
+      codiconsUri,
       generateNonce: () => crypto.randomBytes(16).toString("hex"),
       postHtml: (html: string) => {
         webviewView.webview.html = html;
@@ -93,10 +105,25 @@ export function activate(context: vscode.ExtensionContext): void {
   statusBarItem.show();
   context.subscriptions.push(statusBarItem);
 
-  const provider = new DecoyViewProvider(statusBarItem);
+  const provider = new DecoyViewProvider(statusBarItem, context.extensionUri);
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider("decoy.tracePanel", provider),
   );
+
+  // Live auto-refresh: watches .decoy/audit.enc and .decoy/overrides.json
+  // so the panel picks up a new request or override change as soon as it
+  // lands on disk, without the user needing to click Refresh -- this is
+  // what makes the panel's "live" status dot true rather than decorative.
+  const rootDir = getWorkspaceRoot();
+  if (rootDir) {
+    const watcher = vscode.workspace.createFileSystemWatcher(
+      new vscode.RelativePattern(rootDir, ".decoy/{audit.enc,overrides.json}"),
+    );
+    watcher.onDidChange(() => provider.refresh());
+    watcher.onDidCreate(() => provider.refresh());
+    watcher.onDidDelete(() => provider.refresh());
+    context.subscriptions.push(watcher);
+  }
 
   context.subscriptions.push(
     vscode.commands.registerCommand("decoy.refresh", () => provider.refresh()),
@@ -140,6 +167,12 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     vscode.commands.registerCommand("decoy.showFirstRunNotice", () => {
       void vscode.window.showInformationMessage(FIRST_RUN_NOTICE_TEXT, "Got it");
+    }),
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("decoy.configureMcpProxy", async () => {
+      await runConfigureMcpProxy(context);
     }),
   );
 

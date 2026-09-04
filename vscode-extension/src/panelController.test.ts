@@ -19,6 +19,7 @@ function makeFakeHost(rootDir: string, confirmResult = true): PanelHost & { html
   return {
     rootDir,
     cspSource: "vscode-webview://test",
+    codiconsUri: "vscode-webview://test/codicon.css",
     generateNonce: () => "fixed-nonce",
     postHtml: (html: string) => {
       htmlHistory.push(html);
@@ -171,7 +172,7 @@ describe("PanelController.handleMessage", () => {
 
     expect(readVaultFixture(root)).toEqual({});
     expect(readOverrides(root)).toEqual(overrides); // kept, not cleared
-    expect(host.htmlHistory[host.htmlHistory.length - 1]).toContain("No requests recorded yet");
+    expect(host.htmlHistory[host.htmlHistory.length - 1]).toContain("No requests yet");
     expect(host.htmlHistory[host.htmlHistory.length - 1]).toContain("employee_id");
   });
 
@@ -221,7 +222,7 @@ describe("PanelController.handleMessage", () => {
       never_mask: { patterns: [], field_names: [] },
     });
     const lastHtml = host.htmlHistory[host.htmlHistory.length - 1];
-    expect(lastHtml).toContain("No requests recorded yet");
+    expect(lastHtml).toContain("No requests yet");
     expect(lastHtml).not.toContain("employee_id");
     expect(lastHtml).not.toContain("status");
   });

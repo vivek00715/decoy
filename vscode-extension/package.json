@@ -8,8 +8,12 @@
   "engines": {
     "vscode": "^1.90.0"
   },
-  "categories": ["Other"],
-  "activationEvents": ["onStartupFinished"],
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
   "main": "./out/extension.js",
   "contributes": {
     "viewsContainers": {
@@ -50,6 +54,10 @@
       {
         "command": "decoy.showFirstRunNotice",
         "title": "Decoy: Show Privacy Notice"
+      },
+      {
+        "command": "decoy.configureMcpProxy",
+        "title": "Decoy: Configure MCP Proxy (Claude Code)"
       }
     ]
   },
@@ -58,7 +66,8 @@
     "watch": "tsc -watch -p ./",
     "lint": "eslint src --ext .ts",
     "test": "jest",
-    "pretest": "npm run compile"
+    "pretest": "npm run compile",
+    "bundle-binaries": "node ./scripts/bundle-binaries.js"
   },
   "devDependencies": {
     "@types/fernet": "0.4.3",
@@ -73,6 +82,7 @@
     "typescript": "5.7.2"
   },
   "dependencies": {
+    "@vscode/codicons": "^0.0.46-24",
     "fernet": "0.3.3"
   }
 }

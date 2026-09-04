@@ -15,6 +15,9 @@ import { OverridesFile } from "./types";
 export interface PanelHost {
   rootDir: string;
   cspSource: string;
+  /** webview URI for the bundled Codicon stylesheet (media/codicons/codicon.css),
+   * so the panel's icons render even inside the webview's locked-down CSP. */
+  codiconsUri: string;
   generateNonce(): string;
   postHtml(html: string): void;
   /** Show a modal confirmation before a destructive action, with
@@ -51,6 +54,8 @@ export class PanelController {
     const html = buildWebviewHtml(groups, overrides, {
       cspSource: this.host.cspSource,
       nonce: this.host.generateNonce(),
+      codiconsUri: this.host.codiconsUri,
+      requestCount: groups.length,
     });
     this.host.postHtml(html);
   }

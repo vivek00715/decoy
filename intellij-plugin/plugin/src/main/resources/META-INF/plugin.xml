@@ -18,7 +18,7 @@
              correctly-sized/formatted SVG (13x13, specific color
              conventions) that could not be verified without a real IDE
              to render it in. Omitting it falls back to the Platform's
-             default tool window icon -- functional, just not branded. -->
+             default tool window icon — functional, just not branded. -->
         <toolWindow id="Decoy"
                     anchor="right"
                     factoryClass="com.decoy.plugin.DecoyToolWindowFactory"/>
@@ -28,7 +28,7 @@
         <!-- No `key` attribute: that would look up a display name from a
              resource bundle, which this plugin doesn't define. Without it,
              the Platform uses `id` directly as the display name in the
-             Notifications settings UI -- unverified against a real IDE. -->
+             Notifications settings UI — unverified against a real IDE. -->
         <notificationGroup id="Decoy Notifications" displayType="STICKY_BALLOON"/>
     </extensions>
 
@@ -64,6 +64,11 @@
                     class="com.decoy.plugin.AddNeverMaskPatternAction"
                     text="Add Never-Mask Pattern"
                     description="Add a regex pattern that should never be masked, regardless of automated classification"/>
+            <separator/>
+            <action id="Decoy.ConfigureMcpProxy"
+                    class="com.decoy.plugin.ConfigureMcpProxyAction"
+                    text="Configure MCP Proxy (Claude Code)"
+                    description="Write the bundled decoy-proxy binary into this project's .mcp.json so Claude Code can launch it as an MCP server"/>
         </group>
     </actions>
 </idea-plugin>

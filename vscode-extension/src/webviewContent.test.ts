@@ -1,7 +1,12 @@
 import { buildWebviewHtml, escapeHtml } from "./webviewContent";
 import { emptyOverridesFile, OverridesFile, RequestGroup } from "./types";
 
-const OPTIONS = { cspSource: "vscode-webview://abc", nonce: "test-nonce" };
+const OPTIONS = {
+  cspSource: "vscode-webview://abc",
+  nonce: "test-nonce",
+  codiconsUri: "vscode-webview://abc/codicon.css",
+  requestCount: 0,
+};
 
 function makeGroup(overrides: Partial<RequestGroup> = {}): RequestGroup {
   return {
@@ -43,7 +48,8 @@ describe("buildWebviewHtml", () => {
 
   it("shows an empty state when there are no requests", () => {
     const html = buildWebviewHtml([], emptyOverridesFile(), OPTIONS);
-    expect(html).toContain("No requests recorded yet");
+    expect(html).toContain("No requests yet");
+    expect(html).toContain("Once Claude Code sends a prompt through Decoy");
   });
 
   it("includes the no-absolute-privacy disclaimer text", () => {
@@ -100,6 +106,46 @@ describe("buildWebviewHtml", () => {
     expect(html).not.toMatch(/original|fake_value|realValue/i);
   });
 
+  it("uses Codicon classes for decision/override status instead of plain text labels", () => {
+    const overrideEntry = makeGroup({
+      entries: [
+        {
+          id: "e1",
+          request_id: "req-1",
+          session_id: "session-1",
+          timestamp: "2026-08-30T21:15:03.482Z",
+          source: "prompt_text",
+          field: "EMAIL",
+          decision: "masked",
+          reason: "manual override: always_mask",
+          layer: "override",
+        },
+      ],
+    });
+    const html = buildWebviewHtml([overrideEntry], emptyOverridesFile(), OPTIONS);
+    expect(html).toContain("codicon-check"); // masked
+    expect(html).toContain("codicon-warning"); // override flag
+    expect(html).toContain(OPTIONS.codiconsUri);
+  });
+
+  it("collapses request detail behind a <details> element rather than dumping it flat", () => {
+    const html = buildWebviewHtml([makeGroup()], emptyOverridesFile(), OPTIONS);
+    expect(html).toContain("<details class=\"request-group\"");
+    expect(html).toContain("<summary>");
+  });
+
+  it("includes a pending/loading indicator element for the gap before a refresh lands", () => {
+    const html = buildWebviewHtml([], emptyOverridesFile(), OPTIONS);
+    expect(html).toContain('id="pending-banner"');
+    expect(html).toContain("showPending");
+  });
+
+  it("validates the pattern override input as a real regex before adding it", () => {
+    const html = buildWebviewHtml([], emptyOverridesFile(), OPTIONS);
+    expect(html).toContain("new RegExp(value)");
+    expect(html).toContain("Not a valid regular expression");
+  });
+
   it("has two distinctly-labeled clear buttons with no unstated exception on 'Clear All'", () => {
     const html = buildWebviewHtml([], emptyOverridesFile(), OPTIONS);
     // "Clear Session Data Only" exists and posts the session-only command
@@ -107,7 +153,7 @@ describe("buildWebviewHtml", () => {
     expect(html).toContain('command: "clearSessionDataOnly"');
     // "Clear All Local Data" is explicitly labeled as including overrides
     expect(html).toContain("Clear All Local Data");
-    expect(html.toLowerCase()).toContain("incl. overrides");
+    expect(html.toLowerCase()).toContain("including your configured overrides");
     expect(html).toContain('command: "clearAll"');
     // the hint text spells out the difference so neither label is a surprise
     expect(html).toContain("keeps your always_mask/never_mask overrides");

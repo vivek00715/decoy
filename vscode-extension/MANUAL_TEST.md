@@ -57,13 +57,33 @@ command path is wired independently of the first-run check.
 **Expected:** A status bar item reading `Decoy: 0 request(s)` appears in
 the status bar. Click the Decoy icon in the activity bar — **expected:**
 `resolveWebviewView` fires and a live webview renders inside VS Code's
-UI (not just a string in a test assertion) showing "No requests recorded
-yet in this workspace." and empty override lists. Open the Webview
-Developer Tools (Command Palette → "Developer: Open Webview Developer
-Tools") and confirm there are no console errors — this is the only way
-to catch a real webview-context JS error (a bad DOM selector, a CSP
-violation blocking the inline script), since Jest's `webviewContent`
-tests only check the HTML *string*, never execute it.
+UI (not just a string in a test assertion) showing the Phase 13 empty
+state (a Codicon inbox icon, "No requests yet", "Once Claude Code sends
+a prompt through Decoy, you'll see what got masked here.") and empty
+"Always mask"/"Never mask" override sections, each with a real labeled
+form (Field name / Pattern (regex) inputs + Add buttons), not the older
+bare "No requests recorded yet." text. Open the Webview Developer Tools
+(Command Palette → "Developer: Open Webview Developer Tools") and
+confirm there are no console errors — this is the only way to catch a
+real webview-context JS error (a bad DOM selector, a CSP violation
+blocking the inline script), since Jest's `webviewContent` tests only
+check the HTML *string*, never execute it.
+
+**Visual check — light and dark theme (Phase 13):** Toggle VS Code's
+color theme (Command Palette → "Preferences: Color Theme") between a
+light theme (e.g. "Light+") and a dark theme (e.g. "Dark+"). **Expected:**
+the panel's background, text, borders, badges, and buttons all switch to
+match — every color in `webviewContent.ts` comes from a `--vscode-*` CSS
+variable (`--vscode-editor-background`, `--vscode-foreground`,
+`--vscode-button-background`, etc.), never a hardcoded hex value, so a
+color that doesn't follow the theme switch is a real bug. Also try a High
+Contrast theme (Command Palette → "Preferences: Color Theme" → a
+"High Contrast" entry) and confirm text stays legible against its
+background. Confirm the Codicon icons (checkmark for masked, eye-slash
+for redacted, warning triangle next to an override-layer entry, refresh/
+trash-can toolbar icons) render as real icons in all three themes, not
+empty boxes/tofu — this would mean `media/codicons/codicon.ttf` failed
+to load via the webview's `asWebviewUri`-resolved `codiconsUri`.
 
 ## Test 3 — live rendering pipeline connects end-to-end (thin new surface on top of Jest-covered content)
 
@@ -103,8 +123,22 @@ PY
 This must be run against the same folder VS Code has open as its
 workspace root, or the extension looks in the wrong place.
 
-Click **Refresh** in the live panel. **Expected (the new thing):** the
-status bar text updates from `Decoy: 0 request(s)` to
+**Expected (Phase 13, new — live auto-refresh, no click needed):** within
+a second or two of the script finishing, the panel updates ON ITS OWN —
+this is the new `vscode.workspace.createFileSystemWatcher` on
+`.decoy/{audit.enc,overrides.json}` in `extension.ts` firing
+`provider.refresh()` without any user action, which is what makes the
+header's pulsing "live" status dot true rather than decorative. If it
+does NOT update on its own, click **Refresh** manually as a fallback and
+separately report the auto-refresh as broken.
+
+**Expected (the request card):** the new request renders as a collapsible
+`<details>` card (open by default, since it's the most recent), with a
+header row showing the timestamp, a short session-id badge, and small
+decision-count "chips" (e.g. a blue check-mark chip showing count 2,
+etc.) — clicking the header's chevron collapses/expands the field-level
+table underneath rather than dumping it flat. **Expected (the new
+thing):** the status bar text updates from `Decoy: 0 request(s)` to
 `Decoy: 1 request(s)` — this proves `updateStatusBar()` (never called
 from Jest, since it needs a real `vscode.StatusBarItem`) actually fires
 on a real postHtml callback. **Expected (sanity spot-check only, already
@@ -122,7 +156,15 @@ exists in a live webview.
 
 1. In the live panel's "Always mask" section, type `employee_id` into
    the field-name input and click **Add** (a real mouse click on a real
-   button in the live DOM, not a simulated event).
+   button in the live DOM, not a simulated event). **Expected (Phase 13,
+   new):** a brief "Updating…" indicator with a spinning icon appears
+   right where the disclaimer/hint text sits — this is `showPending()`
+   firing synchronously on click, before the round-trip to the extension
+   host and back completes, so the panel never looks frozen during that
+   gap. Also try clicking **Add** with the field-name input left blank —
+   **expected:** the input gets a red border and an inline error appears
+   ("Field name can't be empty."), and nothing is sent (no pending
+   indicator, no disk write) — client-side validation, not a round trip.
 2. **Expected:** `<repo-root>/.decoy/overrides.json` on disk now lists
    `employee_id` under `always_mask.field_names` — confirming the click
    → postMessage → extension host → disk write chain works end-to-end.
@@ -174,6 +216,76 @@ text shows for the wrong button.
    override list is now empty — confirming `clearOverrides()` actually
    ran from a real confirmed modal dialog, not just when called directly
    in a test.
+
+## Test 7 — configure MCP proxy on a machine with zero Python installed (new surface: `decoy.configureMcpProxy`, `mcpConfigCommand.ts`)
+
+Jest's `mcpConfig.test.ts` (14 tests) already proves the pure merge logic
+in `mcpConfig.ts`: adding a new entry, preserving unrelated `mcpServers`
+entries and unrelated top-level keys, flagging/overwriting an existing
+`decoy` entry, and round-tripping through `serializeMcpConfig`/
+`parseMcpConfig`. None of that needs re-checking below. What's untested
+by Jest (no real `vscode.*` APIs, no real filesystem write via the
+extension host, no bundled binary lookup on a real machine) is exactly
+what this walkthrough exercises.
+
+This is also the one part of this extension's manual test plan that is
+meaningfully different from before: `extension.ts` previously never
+invoked Python at all (the extension only reads/writes local JSON/audit
+files that a separately-run Python process produces), so there was no
+"requires Python" step to remove here. This test's whole point is
+confirming that claim stays true even for the NEW MCP-proxy-configuring
+functionality -- i.e. that a machine with no Python, pip, or venv at all
+can still get a working `decoy proxy` MCP server wired into Claude Code,
+because the extension bundles a prebuilt `decoy-proxy` binary instead of
+shelling out to a Python interpreter.
+
+**Setup:** ideally run this on a machine (or a container/VM) that
+genuinely has no `python`/`python3` on `PATH`, to prove the "no Python
+required" claim for real rather than by absence of a call in the code.
+If that's not available, at minimum confirm nothing in this flow shells
+out to `python`/`pip` (grep `mcpConfigCommand.ts` and `mcpConfig.ts` --
+there should be zero references).
+
+1. Before packaging, run `npm run bundle-binaries` from `vscode-extension/`
+   after building at least one platform's binary via
+   `python scripts/build_binary.py` at the repo root (this step itself
+   does need Python -- it's a BUILD-time step for whoever packages the
+   extension, not something the extension does at runtime). Confirm
+   `vscode-extension/bin/<platform>-<arch>/decoy-proxy` (or `.exe`)
+   exists and is executable afterward.
+2. Launch the Extension Development Host (F5) with a workspace folder
+   open that has no existing `.mcp.json`.
+3. Run **Decoy: Configure MCP Proxy (Claude Code)** from the Command
+   Palette.
+4. When prompted for the target MCP server command, enter something
+   realistic, e.g. `npx` with args `-y @modelcontextprotocol/server-filesystem /tmp`.
+5. **Expected:** a modal confirmation appears showing the exact JSON
+   entry that will be written (`command` pointing at the bundled
+   binary's absolute path, `args` starting with
+   `["proxy", "--session", ...]`) before anything touches disk. Click
+   **Write Config**.
+6. **Expected:** `.mcp.json` now exists at the workspace root containing
+   a `decoy` entry under `mcpServers` matching what was shown, and a
+   confirmation message names the exact path written.
+7. Re-run the command with a different target command. **Expected:** the
+   confirmation message explicitly says the existing `decoy` entry will
+   be REPLACED, and after confirming, `.mcp.json`'s `decoy` entry
+   reflects only the new target -- no stray duplicate entries.
+8. Manually add an unrelated entry to `.mcp.json`'s `mcpServers` (e.g.
+   `"other-server": {"command": "foo", "args": []}`) and re-run the
+   command. **Expected:** after writing, `other-server` is still present
+   unchanged -- confirming the merge doesn't clobber unrelated config.
+9. If you have Claude Code available: point it at this workspace and
+   confirm it can actually launch the bundled `decoy-proxy` binary as an
+   MCP server subprocess (no Python error, no "command not found") and
+   that tool calls through it produce masked results matching the rest
+   of this project's masking behavior. This is the strongest real-world
+   confirmation of the "no Python required" story.
+10. On a platform with no bundled binary for the running machine's
+    `process.platform`-`process.arch` (e.g. only macOS was bundled, but
+    you're running the Extension Development Host on Linux), running the
+    command should show a clear error naming the missing platform/arch
+    rather than crashing or silently writing a broken `command` path.
 
 ## Things to watch for that would indicate a real bug, not just "needs polish"
 

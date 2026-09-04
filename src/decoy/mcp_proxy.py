@@ -66,7 +66,9 @@ from typing import Any, Optional
 import anyio
 import mcp.types as types
 from mcp.client.session import ClientSession
+from mcp.client.stdio import StdioServerParameters, stdio_client
 from mcp.server.lowlevel import Server
+from mcp.server.stdio import stdio_server
 
 from .logging_config import get_logger
 from .masker import Masker
@@ -376,3 +378,83 @@ class MaskingProxy:
                 ],
                 is_error=False,
             )
+
+
+async def run_stdio(
+    target_command: str,
+    target_args: list[str],
+    session_id: str = DEFAULT_SESSION_ID,
+    target_env: Optional[dict[str, str]] = None,
+    target_cwd: Optional[str] = None,
+) -> None:
+    """Wire up the real process-level topology this module's docstring
+    describes: connect to `target_command`/`target_args` as a real
+    subprocess MCP server over stdio (the "target"), wrap it in a
+    MaskingProxy, and re-expose that proxy over THIS process's own
+    stdin/stdout so a real MCP client (e.g. Claude Code) can launch this
+    as its server subprocess.
+
+    This is the one piece MaskingProxy itself deliberately doesn't own
+    (see its docstring: it's handed an already-connected
+    `target_session`) -- tests wire ClientSession over in-memory streams
+    instead, since that's what a fast test needs; a real invocation needs
+    real stdio processes, which is what this function provides.
+    """
+    target_params = StdioServerParameters(
+        command=target_command, args=target_args, env=target_env, cwd=target_cwd
+    )
+    async with stdio_client(target_params) as (target_read, target_write):
+        async with ClientSession(target_read, target_write) as target_session:
+            await target_session.initialize()
+
+            proxy = MaskingProxy(target_session=target_session, session_id=session_id)
+            await proxy.discover()
+
+            async with stdio_server() as (proxy_read, proxy_write):
+                await proxy.server.run(
+                    proxy_read,
+                    proxy_write,
+                    proxy.server.create_initialization_options(),
+                )
+
+
+def main(argv: Optional[list[str]] = None) -> int:
+    """Standalone entry point for running the proxy as its own process,
+    e.g. `python -m decoy.mcp_proxy <target-command> [target-args...]` or
+    via the `decoy proxy` CLI subcommand (see cli.py), which is the
+    packaged/PyInstaller-bundled entry point end users actually invoke.
+    """
+    import argparse
+    import sys
+
+    parser = argparse.ArgumentParser(
+        prog="decoy-proxy",
+        description=(
+            "Run Decoy's MCP masking proxy: connects to a real target MCP server as a "
+            "subprocess and re-exposes its tools over this process's own stdio, masking "
+            "every tool result before it reaches the calling client (e.g. Claude Code)."
+        ),
+    )
+    parser.add_argument("--session", default=DEFAULT_SESSION_ID, help="session_id to mask/vault under")
+    parser.add_argument(
+        "target_command", help="the real target MCP server's executable, e.g. `npx` or `/path/to/server`"
+    )
+    parser.add_argument(
+        "target_args", nargs=argparse.REMAINDER, help="arguments passed through to the target MCP server"
+    )
+    args = parser.parse_args(argv)
+
+    try:
+        anyio.run(run_stdio, args.target_command, args.target_args, args.session)
+    except KeyboardInterrupt:
+        return 0
+    except Exception as exc:  # noqa: BLE001 - a proxy failure should print cleanly, not stack-trace
+        print(f"decoy-proxy: error: {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    import sys
+
+    sys.exit(main())

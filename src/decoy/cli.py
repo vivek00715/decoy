@@ -74,6 +74,17 @@ def _cmd_audit_clear_all(_args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_proxy(args: argparse.Namespace) -> int:
+    """Run the MCP masking proxy (decoy.mcp_proxy). Imported lazily so
+    `decoy version`/`audit`/`overrides` don't require the `mcp` extra to
+    be installed -- only `decoy proxy` does.
+    """
+    from .mcp_proxy import main as proxy_main
+
+    proxy_argv = ["--session", args.session, args.target_command, *args.target_args]
+    return proxy_main(proxy_argv)
+
+
 def _cmd_overrides_show(_args: argparse.Namespace) -> int:
     store = get_default_store()
     rules = store.rules()
@@ -111,6 +122,26 @@ def build_parser() -> argparse.ArgumentParser:
         "clear-all", help="clear EVERYTHING: audit, vault, and overrides -- no exceptions"
     )
     audit_clear_all.set_defaults(func=_cmd_audit_clear_all)
+
+    proxy = subparsers.add_parser(
+        "proxy",
+        help="run the MCP masking proxy in front of a real target MCP server (requires the `mcp` extra)",
+        description=(
+            "Connects to a real target MCP server as a subprocess and re-exposes its tools "
+            "over this process's own stdio, masking every tool result before it reaches the "
+            "calling client (e.g. Claude Code). Point Claude Code (or any MCP client) at "
+            "`decoy proxy -- <target-command> [target-args...]` instead of the target server "
+            "directly."
+        ),
+    )
+    proxy.add_argument("--session", default="mcp-proxy", help="session_id to mask/vault under")
+    proxy.add_argument(
+        "target_command", help="the real target MCP server's executable, e.g. `npx` or `/path/to/server`"
+    )
+    proxy.add_argument(
+        "target_args", nargs=argparse.REMAINDER, help="arguments passed through to the target MCP server"
+    )
+    proxy.set_defaults(func=_cmd_proxy)
 
     overrides = subparsers.add_parser("overrides", help="inspect the local overrides file")
     overrides_sub = overrides.add_subparsers(dest="overrides_command", required=True)

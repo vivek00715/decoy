@@ -17,6 +17,12 @@ ner = ["presidio-analyzer==2.2.357"]
 mcp = ["mcp==2.1.1", "anyio==4.14.2"]
 llm = ["anthropic==0.40.0"]
 dev = ["pytest==8.3.3", "pip-audit==2.7.3"]
+# Separate from `dev`: pyinstaller is only needed to produce the
+# standalone `decoy-proxy` binary (scripts/build_binary.py), not for
+# day-to-day development/testing -- keeping it out of `dev` means a
+# contributor running `pip install -e ".[dev]"` doesn't pull in a
+# packaging tool they don't need.
+build = ["pyinstaller==6.22.2"]
 
 [project.scripts]
 decoy = "decoy.cli:main"

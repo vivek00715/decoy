@@ -1,0 +1,88 @@
+# UNVERIFIED -- written and reviewed but never run against a real
+# GitHub Actions execution (same caveat as ci.yml: no push has ever
+# triggered this workflow as of authoring it). Before relying on this
+# for a real release, push a `v*` tag to a real GitHub repo and confirm
+# all three build jobs go green AND the release job actually attaches
+# three binaries to the GitHub Release -- treat that first real run as
+# a verification step in its own right, not a formality.
+#
+# Builds the standalone `decoy-proxy` binary (see scripts/build_binary.py
+# and Phase 12 of the project) on all three target OSes and attaches
+# each to the GitHub Release created for the pushed tag.
+name: Release binaries
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build:
+    name: Build decoy-proxy (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact_name: decoy-proxy
+            asset_name: decoy-proxy-linux-x86_64
+          - os: macos-latest
+            artifact_name: decoy-proxy
+            asset_name: decoy-proxy-macos
+          - os: windows-latest
+            artifact_name: decoy-proxy.exe
+            asset_name: decoy-proxy-windows-x86_64.exe
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install package + mcp extra + pyinstaller (build extra)
+        run: pip install -e ".[mcp,build]"
+
+      - name: Build standalone binary
+        run: python scripts/build_binary.py
+
+      - name: Smoke-test the binary starts with no Python env active
+        # Confirms PyInstaller actually bundled everything needed --
+        # a missing dependency shows up here as an ImportError/traceback
+        # instead of the clean version string.
+        shell: bash
+        run: |
+          ./dist/${{ matrix.artifact_name }} version
+          ./dist/${{ matrix.artifact_name }} --help
+
+      - name: Rename artifact for release upload
+        shell: bash
+        run: cp "dist/${{ matrix.artifact_name }}" "dist/${{ matrix.asset_name }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset_name }}
+          path: dist/${{ matrix.asset_name }}
+          if-no-files-found: error
+
+  release:
+    name: Attach binaries to GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist-artifacts
+          merge-multiple: true
+
+      - name: List downloaded artifacts
+        run: ls -la dist-artifacts
+
+      - name: Create/update GitHub Release with binaries attached
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist-artifacts/*
+          fail_on_unmatched_files: true
+          generate_release_notes: true

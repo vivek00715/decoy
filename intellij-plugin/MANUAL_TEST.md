@@ -1,56 +1,109 @@
 # Decoy IntelliJ plugin — manual test walkthrough
 
-This file targets ONLY the surface a real IntelliJ instance can prove.
-The `core` module (57 JUnit tests, all passing — run `./gradlew :core:test`
-yourself to confirm) already proves: audit log decrypt/parse/format-version
-handling, real cross-language Fernet interop (a genuine Python-produced
-ciphertext is a hardcoded test fixture in `CryptoTest.kt`), override
-read/write/round-trip PLUS remove/edit-in-place transform logic
-(`OverrideEditsTest.kt`, including the documented edge cases: editing a
-value that collides with an existing entry merges rather than duplicates,
-editing to a blank value removes, editing a missing value appends),
-`PanelController`'s message-handling logic for all five operations
-(`refresh`, `clearSession`, `clearSessionDataOnly`, `clearAll`,
-`saveOverrides`) via an in-memory fake `PanelHost`, and the HTML-rendering
-logic in `PanelContent.kt` (escaping/XSS safety, the no-absolute-privacy
-disclaimer text, the "Clear All includes overrides" distinction, the
-edit/remove hyperlink encoding for every override entry including
-patterns containing a literal colon, no real/fake value ever appearing in
-the rendered HTML string). None of that needs re-checking below.
+This file targets ONLY the surface a real, interactive IntelliJ instance
+can prove. The `core` module (89 JUnit tests, all passing — run
+`./gradlew :core:test` yourself to confirm) already proves: audit log
+decrypt/parse/format-version handling, real cross-language Fernet
+interop (a genuine Python-produced ciphertext is a hardcoded test
+fixture in `CryptoTest.kt`), override read/write/round-trip PLUS
+remove/edit-in-place transform logic (`OverrideEditsTest.kt`), MCP config
+merge/write logic (`McpConfigWriterTest.kt`), `PanelController`'s
+message-handling logic for all five operations via an in-memory fake
+`PanelHost`, the Swing-fallback HTML-rendering logic in `PanelContent.kt`,
+AND (Phase 13, new) the JCEF webview's HTML-rendering logic in
+`WebviewContentTest.kt` and its JS→Kotlin message-parsing logic in
+`WebviewMessageTest.kt` — escaping/XSS safety (including a value that
+tries to break out of the embedded JS override-state literal, not just
+out of HTML), the no-absolute-privacy disclaimer text, theme-color
+substitution, and Codicon usage are all covered there. None of that needs
+re-checking below.
 
-**The entire `plugin` module (`DecoyToolWindowFactory.kt`,
-`DecoyProjectService.kt`, `Actions.kt`, `DecoyFirstRunActivity.kt`,
-`plugin.xml`) was never compiled in the environment that wrote it.**
-Getting the IntelliJ Platform Gradle Plugin to resolve a full IDE
-distribution here was judged disproportionate to the value it would add
-without a real IDE to actually run the result in anyway. Every claim
-below about this module is therefore unverified until you do the steps
-in this file — not "probably fine," genuinely unknown until checked.
+**Phase 13 update — the `plugin` module now HAS been compiled and
+packaged for real, in the environment that did the JCEF migration.**
+Both `./gradlew :plugin:compileKotlin` and `./gradlew :plugin:buildPlugin`
+ran to `BUILD SUCCESSFUL` against a real downloaded `IC-2024.2`
+distribution, producing a real, installable
+`plugin/build/distributions/plugin.zip`. `buildPlugin`'s
+`buildSearchableOptions` step even launches a real (headless) IDE
+instance to introspect the plugin, and its log confirmed
+`JBCefApp.isSupported()` correctly reports `false` in a headless
+environment (`"JCEF is manually disabled in headless env via
+'ide.browser.jcef.headless.enabled=false'"`), meaning
+`DecoyProjectService`'s Swing/`JEditorPane` fallback path was actually
+exercised, not just theorized.
+
+**What this does NOT prove, and is still what this file exists to check:**
+no real GUI session with a display was run. Nobody has actually SEEN the
+tool window, clicked a button in it, or watched the JCEF webview render
+interactively. Compiling and packaging catches type errors and missing
+APIs; it cannot catch a wrong color, a JS handler that's wired to the
+wrong element, or a webview that renders as a blank white box. Treat
+every "Expected" below as still genuinely unchecked.
+
+## JCEF vs Swing — the investigation and decision (read this first)
+
+Before doing any cosmetic work, Phase 13 investigated whether this
+module's original design — a read-only `JEditorPane` with `<a
+href="decoy-clear-session:...">`-style hyperlinks standing in for real
+buttons (a limitation disclosed back in Phase 9) — could be replaced with
+JCEF (JetBrains' bundled Chromium Embedded Framework), which would allow
+reusing the same rich HTML/CSS/JS design as the VS Code extension's
+webview with REAL clickable buttons instead of the hyperlink workaround.
+
+**Decision: yes, JCEF is used, with an automatic fallback.** Findings:
+- JCEF (`com.intellij.ui.jcef.*`) has shipped with the IntelliJ Platform's
+  bundled JetBrains Runtime since 2020.1 — well before this plugin's
+  `sinceBuild="242"` (2024.2) floor.
+- The downloaded `IC-2024.2` distribution's JBR physically contains a
+  JCEF helper app (`jbr/Contents/Frameworks/jcef Helper*.app` on macOS),
+  confirming it's actually bundled for this target, not just
+  documented as available in general.
+- `com.intellij.ui.jcef.JBCefBrowser`/`JBCefApp`/`JBCefJSQuery` compiled
+  cleanly against the real SDK in this environment.
+- CEF/Chromium's license is permissive (BSD-style); using it from a
+  third-party plugin via the Platform's own bundled copy is a standard,
+  widely-used pattern (e.g. the Markdown plugin's preview pane).
+- At RUNTIME, JCEF can still be genuinely unavailable (a custom JDK
+  instead of the bundled JBR, certain minimal Linux JBR builds) — this is
+  exactly what `JBCefApp.isSupported()` exists to detect, and
+  `DecoyProjectService` checks it once and falls back to the original
+  `JEditorPane` + hyperlink rendering (`renderHtml()` in `PanelContent.kt`,
+  unchanged) when it's false, rather than assuming JCEF is always there.
+
+**What is NOT literally shared** between the two IDE extensions: there is
+no single physical HTML/CSS/JS file loaded by both a Node/TypeScript
+build and a Kotlin/Gradle build — introducing that cross-language build
+tooling was judged out of scope for this phase. What IS shared is the
+design system (CSS class names, layout, Codicon icon choices — the exact
+same `codicon.ttf`/`codicon.css` files are bundled into both extensions)
+and the client→host JS message contract (`{command, ...}` JSON objects
+shaped identically to the VS Code webview's `WebviewMessage` union).
+`WebviewContent.kt`'s class-level doc comment has the full detail.
 
 ## Setup
 
 1. You need a real IntelliJ IDEA (Community is fine, matches the `IC`
    platform type this plugin targets) installed, or let the Gradle
-   IntelliJ Platform plugin download one via the `runIde` task below.
-2. From `intellij-plugin/`, run `./gradlew :plugin:runIde`. **This is the
-   first time this module's Kotlin will ever be compiled against the
-   real IntelliJ Platform SDK.** Expect this to surface compile errors
-   the hand-written code couldn't be checked for — read them before
-   assuming anything else in this file is reachable. If it fails to
-   compile, that is itself the most important finding from this whole
-   walkthrough; report the exact error back before going further.
+   IntelliJ Platform plugin download one via the `runIde` task below —
+   `./gradlew :plugin:buildPlugin` has already confirmed this downloads
+   and resolves correctly in a similar sandboxed environment.
+2. From `intellij-plugin/`, run `./gradlew :plugin:runIde`. Compilation
+   itself is no longer the risk it once was (see above) — this step is
+   now about actually watching the IDE window come up.
 3. Once it launches, open (or create) any project as the sandbox IDE's
    workspace — this becomes the project whose root the plugin treats as
    `rootDir` (via `project.basePath`).
 
-## Test 1 — the plugin actually compiles and loads (this is not a formality)
+## Test 1 — the plugin loads and shows its tool window
 
-**Expected:** `./gradlew :plugin:runIde` succeeds and a second IntelliJ
-window opens with Decoy's tool window icon visible on the right-hand
-tool window bar (anchor="right" in plugin.xml). If this step fails,
-every judgment call flagged in the source files (see each file's
-"UNVERIFIED" doc comment) is a candidate cause — check the compiler
-error against the specific API call it names.
+**Expected:** a second IntelliJ window opens with Decoy's tool window
+icon visible on the right-hand tool window bar (anchor="right" in
+plugin.xml). Compilation succeeding is now a known-good baseline (see
+above); this step is about the window actually appearing and the JCEF
+webview rendering something other than a blank page — if it's blank,
+check `webviewBaseUrl()` in `DecoyProjectService.kt` (the `file://` base
+URL used to resolve `codicon.css`/`codicon.ttf`) is resolving to a real
+bundled resource, not `about:blank`.
 
 ## Test 2 — first-run notification (new surface: `ProjectActivity` + `NotificationGroupManager` + `PropertiesComponent`)
 
@@ -70,16 +123,45 @@ wrong and needs the project-level `getInstance(project)` overload
 instead, or the coordinator's confirmation that project-scoped is
 actually preferred.
 
-## Test 3 — tool window opens and the live JEditorPane actually renders
+## Test 3 — tool window opens and the live JCEF webview actually renders (visual check)
 
-**Expected:** Clicking the Decoy tool window icon opens a panel showing
-"No requests recorded yet in this project." and empty "Always mask" /
-"Never mask" lists — this is `PanelContent.kt`'s `renderHtml()` output
-(already proven correct as a string by `PanelContentTest.kt`) actually
-displaying inside a live `JEditorPane`, which JUnit cannot execute.
-Right-click inside the pane → check for any Swing rendering artifacts
-(broken table borders, HTML not parsing) that a string-level test
-can't catch.
+**Expected:** the tool window shows the same design as the VS Code
+extension's panel — a "DECOY" header with a pulsing live-status dot, an
+empty state reading "No requests yet — once Claude Code sends a prompt
+through Decoy, you'll see what got masked here." with a Codicon inbox
+icon (not plain text), and "Always mask"/"Never mask" override sections
+each with a labeled "Field name" / "Pattern (regex)" input and a real
+`+ Add` button — this is `WebviewContentTest.kt`'s `renderWebviewHtml()`
+output (already proven correct as an HTML string) actually rendering
+inside a live JCEF/Chromium view, which JUnit cannot execute.
+
+- **Visual check, light theme:** switch the sandbox IDE to a light theme
+  (Settings → Appearance & Behavior → Appearance → Theme) and reopen/
+  refresh the tool window. Confirm the panel's background, text, borders,
+  and button colors all switch to match — these come from
+  `computeWebviewTheme()` reading real `UIManager` colors at render time,
+  not hardcoded values, so a color that stays dark-themed in a light IDE
+  (or vice versa) is a real bug in that function.
+- **Visual check, dark theme:** switch back to Darcula (or your default
+  dark theme) and confirm the same.
+- Confirm the Codicon icons actually render as icons (a checkmark, an
+  eye-slash, a warning triangle, a trash can) — if you instead see empty
+  boxes/tofu characters, the `codicon.ttf` font failed to load via the
+  `file://` base URL `webviewBaseUrl()` computes; check the browser's
+  devtools (right-click → "Inspect", available on internal JCEF builds)
+  for a 404 on `codicon.ttf`/`codicon.css`.
+- Confirm the request cards render as `<details>`/`<summary>` elements
+  that actually expand/collapse when clicked, not everything shown flat.
+
+If JCEF is unavailable in your environment (`JBCefApp.isSupported()` is
+false — check the IDE log for the same headless-disable message this
+was confirmed to produce in this project's own sandboxed build, or for a
+genuine "JCEF not supported" message on an unusual platform/JDK), the
+tool window instead shows the ORIGINAL Swing `JEditorPane` fallback
+(`renderHtml()`'s output — plain text links, no icons, no collapsible
+sections). This is expected, not a bug — but note in your report which
+path you actually exercised, since the rest of this file's steps below
+describe the JCEF/webview path specifically.
 
 ## Test 4 — trigger a masked request, confirm the live pane updates
 
@@ -122,24 +204,37 @@ only, already proven by `PanelContentTest.kt`):** no real value
 (`bob@example.com`, `EMP-778899`, "performance review") appears anywhere
 in the pane.
 
-## Test 5 — "Clear this session" hyperlink (new, unusual-pattern surface)
+## Test 5 — "Clear this session" is now a REAL button (fixes the Phase 9 limitation)
 
-The per-session clear action is a plain `<a href="decoy-clear-session:...">`
-link inside the read-only `JEditorPane`, intercepted by a
-`HyperlinkListener` in `DecoyProjectService.kt` — this specific
-pattern (using a custom URI scheme to route an in-app action through an
-HTML hyperlink) has no equivalent in the VS Code extension and is the
-least-precedented IntelliJ UI choice in this module.
+Before Phase 13, the per-session clear action was a plain `<a
+href="decoy-clear-session:...">` link inside the read-only `JEditorPane`,
+intercepted by a `HyperlinkListener` — a workaround for not being able to
+embed real Swing buttons per table row, disclosed as a limitation back in
+Phase 9. Under JCEF, it's a real `<button class="icon-btn
+clear-session-btn">` with a real `addEventListener("click", ...)` in
+`WebviewContent.kt`'s generated JS, posting `{command: "clearSession",
+sessionId}` through the `JBCefJSQuery` bridge — the same message shape
+`WebviewMessageTest.kt` already proves parses correctly.
 
-1. Click the "Clear this session" link on the request group from Test 4.
-2. **Expected:** the `HyperlinkListener` fires, `handleHyperlink()`
-   correctly strips the `decoy-clear-session:` prefix to recover the
-   session ID, and `PanelController.clearSession(sessionId)` runs — the
-   pane should update to "No requests recorded yet" immediately.
-3. If clicking the link does nothing, or throws, this specific pattern
-   was the wrong approach and the tool window needs a real component
-   (e.g. a `JBTable` cell with an embedded button) instead of an HTML
-   link inside a read-only pane — report which happened.
+1. Click the trash-can icon button on the request group's row from Test 4
+   (hover it first — **expected:** a hover-highlight background appears,
+   confirming real `:hover`/mouse-event handling, not just a static
+   image).
+2. **Expected:** the "Updating…" pending banner (a spinning Codicon
+   loading icon) briefly appears — this is `WebviewContent.kt`'s
+   `showPending()` firing immediately on click, before the
+   `JBCefJSQuery` round-trip to `DecoyProjectService.handleWebviewMessage`
+   and back completes; if you never see it (the swap happens too fast to
+   perceive, or it never appears at all), that specific gap-covering
+   affordance isn't working — note which.
+3. **Expected:** the request group disappears and the panel returns to
+   the empty state, no page reload/flash beyond the pending banner.
+4. If clicking the button does nothing, open the browser devtools
+   (right-click → Inspect, if available) and check the console for a
+   JS error — the most likely failure is `window.__decoyPost` being
+   undefined, which would mean `DecoyProjectService.withBridgeInjected()`
+   didn't successfully splice its bridge `<script>` before the page's own
+   scripts ran.
 
 ## Test 6 — "Clear Session Data Only" vs "Clear All Local Data", including the real modal dialog
 
@@ -162,67 +257,140 @@ least-precedented IntelliJ UI choice in this module.
    override list — confirming `clearOverrides()` actually ran from a
    real confirmed IntelliJ modal dialog.
 
-## Test 7 — edit and remove an override, and add a pattern override (new surface: `Messages.showInputDialog`'s pre-filled `initialValue` overload)
+## Test 7 — add/remove a pattern override via the real in-page form, with inline validation (JCEF path)
 
-Adding a *field name* override was already covered by Test 6, and its
-underlying transform logic (`addOverrideEntry`) is JUnit-tested. This
-test targets what's new: removing/editing an existing entry via its
-hyperlink, and adding a *pattern* override (not just a field name).
+Phase 13 added a real override-editing FORM directly in the webview
+(matching the VS Code panel exactly), in addition to the pre-existing
+toolbar `AnAction`s (`AddAlwaysMaskPatternAction` etc., driven by
+`Messages.showInputDialog` — those still work unchanged and are a
+separate code path, not exercised by this test). The in-page form has no
+"edit in place" — only add and remove, exactly like the VS Code
+extension's — so this test does NOT cover editing an existing entry's
+value (that only exists via the toolbar's separate `Messages` dialogs, or
+under the Swing fallback's `[edit]` hyperlink, both unchanged from
+before).
 
-1. Click **"Add Always-Mask Pattern"**, enter `EMP-\d{6}`. **Expected:**
-   `.decoy/overrides.json` now lists it under `always_mask.patterns`
-   (not `field_names`), and the pane shows it in `<code>` styling with
-   `[edit]`/`[remove]` links next to it.
-2. Click **`[edit]`** next to that pattern. **Expected:** an input dialog
-   opens with the text field **pre-filled** with `EMP-\d{6}` (this is the
-   specific new/unverified behavior — `Messages.showInputDialog`'s
-   6-argument overload with an `initialValue` parameter was confirmed to
-   exist with this exact signature by reading IntelliJ Community's real
-   `Messages.java` source during development, but was never exercised by
-   an actual compiler or a real dialog). Change it to `EMP-\d{7}` and
-   confirm. **Expected:** the pane now shows `EMP-\d{7}`, and
-   `.decoy/overrides.json` reflects the change with the entry's list
-   position unchanged (there was only one entry, so position isn't a
-   strong signal here — if you have multiple patterns, edit the middle
-   one and confirm the others don't reorder, matching
-   `OverrideEditsTest.kt`'s `` `edit replaces in place preserving
-   position` `` test).
-3. Click **`[remove]`** next to it. **Expected:** the entry disappears
-   from both the pane and `.decoy/overrides.json` immediately, no
-   confirmation dialog (removing a single override entry was deliberately
-   NOT made a "destructive, confirm first" action, unlike Clear Session
-   Data Only / Clear All — it's a single easily-reversible edit, not a
-   bulk irreversible wipe; flag to the coordinator if a confirmation step
-   is wanted here after all).
-4. If clicking `[edit]` or `[remove]` does nothing, or throws: check
-   `DecoyProjectService.kt`'s `decodeOverrideLink` — the most likely
-   failure is the link-splitting logic not matching what
-   `PanelContent.kt`'s `appendOverrideItem` actually encoded (both sides
-   were written to agree on a `kind.name:list.name:value` format split
-   with a limit of 3, but this agreement was never checked by a compiler
-   that understands both files together).
+1. In the "Always mask" section's "Pattern (regex)" input, type `(bad`
+   (a deliberately invalid, unclosed-group regex) and click **Add**.
+   **Expected:** the input gets a red border and an inline error message
+   appears below it (something like "Not a valid regular expression:
+   ...") — **and nothing is sent to the backend** (no pending banner, no
+   change to `.decoy/overrides.json`). This is `new RegExp(value)`
+   throwing client-side in `WebviewContent.kt`'s generated JS, exactly
+   mirroring the VS Code webview's same validation.
+2. Clear it and type `EMP-\d{6}`, click **Add**. **Expected:**
+   `.decoy/overrides.json` now lists it under `always_mask.patterns`, and
+   the pane shows it in `<code>` styling with a real remove (×) button
+   next to it — no page reload, the pending banner briefly shows then the
+   new entry appears.
+3. Click the **×** button next to that pattern. **Expected:** the entry
+   disappears from both the pane and `.decoy/overrides.json`
+   immediately, no confirmation dialog (removing a single override entry
+   was deliberately NOT made a "destructive, confirm first" action,
+   unlike Clear Session Data Only / Clear All).
+4. Repeat step 1's invalid-input check for the "Field name" input with an
+   empty value (click **Add** with the field blank) — **expected:** the
+   same red-border + inline-error treatment, "Field name can't be
+   empty.", and again nothing posted.
+5. If nothing happens on any of the above (no error shown, no entry
+   added/removed), open the browser devtools and check for a JS error —
+   the most likely failure is a `document.querySelector` mismatch between
+   an input's `id`/`data-kind` attribute and what the click handler looks
+   up, since this form's JS was written fresh for Phase 13 and only
+   string-level-tested via `WebviewContentTest.kt`, never executed in a
+   real DOM before this manual test.
+
+**Swing-fallback-only:** if you're on the `JEditorPane` fallback path
+(Test 3 didn't show the webview design), the override list instead uses
+`[edit]`/`[remove]` hyperlinks exactly as before Phase 13 — see
+`DecoyProjectService.kt`'s `handleHyperlink`/`decodeOverrideLink` for
+that unchanged logic, still covered by `PanelContentTest.kt` as a string
+and still never exercised in a real `JEditorPane` in this environment.
+
+## Test 8 — configure MCP proxy on a machine with zero Python installed (new surface: `ConfigureMcpProxyAction`, `bundleBinaries` Gradle task)
+
+The actual config-merge LOGIC is genuinely JUnit-tested and passing:
+`McpConfigWriterTest.kt` (16 tests) covers parsing/merging/round-tripping
+a `.mcp.json`, preserving unrelated `mcpServers` entries and unrelated
+top-level keys, flagging/overwriting an existing `decoy` entry, and the
+real atomic-write path (`writeMcpProxyConfig`) against a real temp
+filesystem — run `./gradlew :core:test` yourself to confirm (89 tests
+total across `core`, all passing as of this writing). None of that needs
+re-checking below. What's untested — the whole `plugin` module's Swing
+wiring (`ConfigureMcpProxyAction`, `findBundledDecoyProxyBinary`'s real
+`PluginManagerCore`/`CpuArch`/`SystemInfo` calls, and whether the
+`bundleBinaries` Gradle task actually produces a plugin ZIP with the
+binary inside it at the path the action expects) is exactly what this
+test exercises.
+
+1. Before `./gradlew :plugin:runIde` / `:plugin:buildPlugin`, build at
+   least one platform's binary via `python scripts/build_binary.py` at
+   the repo root (Python is needed for this BUILD-time step only, not by
+   the plugin at runtime). Confirm `<repo root>/dist/decoy-proxy` (or
+   `.exe`) exists.
+2. Run `./gradlew :plugin:bundleBinaries` and confirm
+   `plugin/build/generated-resources/bin/<platform>-<arch>/decoy-proxy`
+   exists and matches the file from step 1 (this directory is added as a
+   resources `srcDir`, so its *contents* become the resources root —
+   `bin/<platform>-<arch>/decoy-proxy` is the final path packaged into
+   the plugin, matching what `findBundledDecoyProxyBinary` looks for).
+3. Run `./gradlew :plugin:runIde`. If it fails to compile, that is
+   itself the most important finding — `Actions.kt`'s new imports
+   (`PluginManagerCore`, `PluginId`, `CpuArch`, `SystemInfo`) are
+   UNVERIFIED against the real Platform SDK, same as everything else in
+   `plugin/`.
+4. In the sandbox IDE, open a project with no existing `.mcp.json`. Run
+   **Configure MCP Proxy (Claude Code)** from the Decoy toolbar group.
+5. If `findBundledDecoyProxyBinary` returns null (no binary bundled for
+   this platform, or `PluginManagerCore.getPlugin` doesn't resolve this
+   dev-mode sandbox plugin the way it would a real installed one),
+   **expected:** a clear error dialog naming the problem, not a crash —
+   this specific failure mode (dev-mode `runIde` plugin path vs. a real
+   installed plugin path) could not be checked without a real IDE and is
+   flagged as a genuine open risk.
+6. Otherwise: enter a target command (e.g. `npx`) and args (e.g.
+   `-y @modelcontextprotocol/server-filesystem /tmp`). **Expected:** a
+   Yes/No dialog shows the exact JSON entry before anything is written.
+   Confirm it.
+7. **Expected:** `.mcp.json` now exists at the project root with a
+   `decoy` entry under `mcpServers`, `command` pointing at the bundled
+   binary's absolute path inside the plugin's install directory, `args`
+   starting with `["proxy", "--session", ...]`.
+8. Manually add an unrelated entry to `.mcp.json` and re-run the action
+   with a different target. **Expected:** the unrelated entry survives
+   unchanged and the `decoy` entry is replaced, not duplicated — matching
+   `McpConfigWriterTest.kt`'s merge tests.
+9. If you have Claude Code available, point it at this project and
+   confirm it can launch the bundled binary as an MCP server subprocess
+   with no Python required on the machine at all.
 
 ## Things to watch for that would indicate a real bug, not just "needs polish"
 
-- **The module failing to compile at all** (Test 1) — the single most
-  likely outcome given zero prior compilation, and the reason this
-  whole file exists.
-- Any real email/name/ID value appearing anywhere in the live pane —
-  `PanelContentTest.kt` already proves the HTML-building function can't
-  produce this from correct input, so seeing it live would mean
-  `DecoyProjectService.kt`'s wiring is bypassing that function or passing
-  it something unexpected.
+- **The tool window rendering as a blank white box** (Test 1/3) — most
+  likely a `codicon.css`/`codicon.ttf` resource-resolution failure via
+  `webviewBaseUrl()`, or `renderWebviewHtml()` producing malformed HTML
+  that Chromium can't parse (unlikely given `WebviewContentTest.kt`, but
+  JUnit only checks string content, never that a real browser accepts it).
+- Any real email/name/ID value appearing anywhere in the live view —
+  `WebviewContentTest.kt`/`PanelContentTest.kt` already prove the
+  HTML-building functions can't produce this from correct input, so
+  seeing it live would mean `DecoyProjectService.kt`'s wiring is
+  bypassing those functions or passing them something unexpected.
 - The first-run notice reappearing per-project (see Test 2) or on every
   restart — a `PropertiesComponent` scope/persistence bug with zero
   JUnit coverage.
-- The hyperlink-based "Clear this session" control not firing at all
-  (see Test 5) — the specific IntelliJ UI pattern used here is the least
-  precedented choice in the whole module.
-- The edit dialog opening with an EMPTY text field instead of pre-filled
-  with the current value (see Test 7 step 2) — this would mean the
-  `initialValue` overload of `Messages.showInputDialog` doesn't behave as
-  the read-but-uncompiled source suggested.
-- An edited or removed override reappearing after a refresh, or a
-  different entry than the one clicked being changed — would mean the
-  `kind:list:value` link encoding/decoding contract between
-  `PanelContent.kt` and `DecoyProjectService.kt` has drifted out of sync.
+- Colors that don't change when you switch the IDE theme (Test 3's
+  light/dark check) — would mean `computeWebviewTheme()` in
+  `DecoyProjectService.kt` is reading a `UIManager` key that doesn't
+  actually update with the theme, or fell through to
+  `WebviewTheme.fallback()`'s hardcoded values.
+- Codicon icons rendering as empty boxes/tofu (Test 3) — a font-loading
+  failure via the `file://` base URL.
+- The real "Clear this session" / override-form buttons not firing at
+  all (Tests 5/7) — check for a JS console error naming
+  `window.__decoyPost` as undefined, meaning the `JBCefJSQuery` bridge
+  script never got spliced into the page before its own scripts ran.
+- The pending "Updating…" banner never appearing on any button click
+  (Test 5 step 2) — the one new "not frozen/broken" affordance Phase 13
+  added; if it silently never shows, that specific UX goal wasn't met
+  even if the underlying action still works.
