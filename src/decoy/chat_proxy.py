@@ -603,10 +603,26 @@ async def _stream_openai(client, base_url: str, headers: dict, body: dict, maske
             yield f"data: {json.dumps(chunk)}\n\n".encode("utf-8")
 
 
-def main(argv: Optional[list[str]] = None) -> int:
+def main(argv: Optional[list[str]] = None, audit_log: Optional[Any] = None) -> int:
     """Standalone entry point: `python -m decoy.chat_proxy` or the
     `decoy chat-proxy` CLI subcommand (see cli.py). Requires the
-    `chat-proxy` extra."""
+    `chat-proxy` extra.
+
+    CONFIRMED BUG, now fixed: this used to call `create_app()` with no
+    config at all, so `ChatProxyConfig.from_env()`'s `audit_log=None`
+    default meant every real `decoy chat-proxy` process ran with
+    masking-decision logging silently disabled -- verified directly by
+    sending a real request through a running instance and confirming no
+    audit file anywhere in the repo was touched. `audit_log` now defaults
+    to `get_default_audit_log()` here for the same reason as
+    `mcp_proxy.main()`: a standalone process IS the whole application,
+    unlike `ChatProxyConfig`/`create_app()` themselves, where staying
+    `None` by default remains correct for a library embedder that may
+    not want disk I/O. cli.py's `_cmd_chat_proxy` also constructs and
+    passes one explicitly, matching the `decoy audit` commands' pattern
+    -- not redundant, since `main()` is also reached directly via
+    `python -m decoy.chat_proxy`, bypassing cli.py entirely.
+    """
     import argparse
 
     parser = argparse.ArgumentParser(
@@ -627,7 +643,14 @@ def main(argv: Optional[list[str]] = None) -> int:
         )
         return 1
 
-    app = create_app()
+    if audit_log is None:
+        from .audit_log import get_default_audit_log
+
+        audit_log = get_default_audit_log()
+
+    config = ChatProxyConfig.from_env()
+    config.audit_log = audit_log
+    app = create_app(config)
     uvicorn.run(app, host=args.host, port=args.port, log_level="info")
     return 0
 

@@ -32,7 +32,11 @@ llm = ["anthropic==0.40.0"]
 # 0.48.0, all fixed only at 1.0.1+ -- caught before this ever shipped,
 # not after.
 chat-proxy = ["starlette==1.6.0", "uvicorn==0.38.0", "httpx==0.28.1"]
-dev = ["pytest==8.3.3", "pip-audit==2.7.3"]
+# pytest bumped 8.3.3 -> 9.1.1: pip-audit flagged PYSEC-2026-1845
+# (CVE-2025-71176, a local tmp-dir naming race) against 8.3.3, fixed only
+# starting 9.0.3. Full test suite re-run clean against 9.1.1 before
+# pinning it.
+dev = ["pytest==9.1.1", "pip-audit==2.7.3"]
 # Separate from `dev`: pyinstaller is only needed to produce the
 # standalone `decoy-proxy` binary (scripts/build_binary.py), not for
 # day-to-day development/testing -- keeping it out of `dev` means a

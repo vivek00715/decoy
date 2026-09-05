@@ -59,6 +59,7 @@ this fix claims to close.
 
 from __future__ import annotations
 
+import functools
 import json
 import uuid
 from typing import Any, Optional
@@ -445,6 +446,7 @@ async def run_stdio(
     session_id: str = DEFAULT_SESSION_ID,
     target_env: Optional[dict[str, str]] = None,
     target_cwd: Optional[str] = None,
+    audit_log: Optional[Any] = None,
 ) -> None:
     """Wire up the real process-level topology this module's docstring
     describes: connect to `target_command`/`target_args` as a real
@@ -458,6 +460,20 @@ async def run_stdio(
     `target_session`) -- tests wire ClientSession over in-memory streams
     instead, since that's what a fast test needs; a real invocation needs
     real stdio processes, which is what this function provides.
+
+    `audit_log`, if given, is forwarded to MaskingProxy so every masking
+    decision made by a REAL `decoy proxy` invocation gets logged -- see
+    `main()`'s docstring for why the CLI entry point defaults this to a
+    real audit log despite MaskingProxy/this function both defaulting to
+    None: a confirmed real bug (found empirically, not from re-reading
+    the code) had `main()` never passing one at all, so every request
+    through the packaged `decoy-proxy` binary -- the one both IDE
+    extensions bundle and auto-configure -- silently ran with logging
+    off. The VS Code/IntelliJ "Recent Requests" panels would show "No
+    requests yet" forever against real traffic. Confirmed directly: ran
+    a real `decoy proxy` subprocess against a real fake target MCP
+    server, made one real tool call through it, and found `.decoy/
+    audit.enc` never created.
     """
     target_params = StdioServerParameters(
         command=target_command, args=target_args, env=target_env, cwd=target_cwd
@@ -466,7 +482,7 @@ async def run_stdio(
         async with ClientSession(target_read, target_write) as target_session:
             await target_session.initialize()
 
-            proxy = MaskingProxy(target_session=target_session, session_id=session_id)
+            proxy = MaskingProxy(target_session=target_session, session_id=session_id, audit_log=audit_log)
             await proxy.discover()
 
             async with stdio_server() as (proxy_read, proxy_write):
@@ -477,11 +493,27 @@ async def run_stdio(
                 )
 
 
-def main(argv: Optional[list[str]] = None) -> int:
+def main(argv: Optional[list[str]] = None, audit_log: Optional[Any] = None) -> int:
     """Standalone entry point for running the proxy as its own process,
     e.g. `python -m decoy.mcp_proxy <target-command> [target-args...]` or
     via the `decoy proxy` CLI subcommand (see cli.py), which is the
     packaged/PyInstaller-bundled entry point end users actually invoke.
+
+    CONFIRMED BUG, now fixed: this function used to call
+    `anyio.run(run_stdio, ...)` with no audit_log at all, and `run_stdio`
+    had no audit_log parameter to pass one through even if it wanted to
+    -- every REAL `decoy proxy` process (the one both IDE extensions
+    bundle and their auto-config feature writes into `.mcp.json`) ran
+    with masking-decision logging silently disabled, this entire time.
+    `audit_log` now defaults to `get_default_audit_log()` here -- a
+    standalone process IS the whole application, unlike a library call
+    (Masker.mask_text, MaskingProxy itself) where audit_log=None staying
+    opt-in is the correct, deliberate default for an embedding caller
+    that may not want disk I/O. cli.py's `_cmd_proxy` also constructs and
+    passes one explicitly, matching the `decoy audit` commands' own
+    pattern in the same file -- belt and suspenders, not redundant dead
+    code, since `main()` is also called directly by
+    `python -m decoy.mcp_proxy`, which never goes through cli.py at all.
     """
     import argparse
     import sys
@@ -503,8 +535,13 @@ def main(argv: Optional[list[str]] = None) -> int:
     )
     args = parser.parse_args(argv)
 
+    if audit_log is None:
+        from .audit_log import get_default_audit_log
+
+        audit_log = get_default_audit_log()
+
     try:
-        anyio.run(run_stdio, args.target_command, args.target_args, args.session)
+        anyio.run(functools.partial(run_stdio, audit_log=audit_log), args.target_command, args.target_args, args.session)
     except KeyboardInterrupt:
         return 0
     except Exception as exc:  # noqa: BLE001 - a proxy failure should print cleanly, not stack-trace

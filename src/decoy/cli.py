@@ -78,21 +78,41 @@ def _cmd_proxy(args: argparse.Namespace) -> int:
     """Run the MCP masking proxy (decoy.mcp_proxy). Imported lazily so
     `decoy version`/`audit`/`overrides` don't require the `mcp` extra to
     be installed -- only `decoy proxy` does.
+
+    Explicitly constructs and passes a real audit log, matching the
+    `_cmd_audit_*` commands' own pattern above -- CONFIRMED BUG, now
+    fixed: this used to call `proxy_main(proxy_argv)` with no audit_log
+    at all, so every real `decoy proxy` invocation (the exact binary both
+    IDE extensions bundle and auto-configure into `.mcp.json`) silently
+    ran with masking-decision logging disabled. Verified directly: ran a
+    real `decoy proxy` subprocess against a real fake target MCP server,
+    made one real tool call through it, confirmed `.decoy/audit.enc` was
+    never created.
     """
     from .mcp_proxy import main as proxy_main
 
     proxy_argv = ["--session", args.session, args.target_command, *args.target_args]
-    return proxy_main(proxy_argv)
+    return proxy_main(proxy_argv, audit_log=get_default_audit_log())
 
 
 def _cmd_chat_proxy(args: argparse.Namespace) -> int:
     """Run the chat-completions masking proxy (decoy.chat_proxy). Imported
     lazily so `decoy version`/`audit`/`overrides`/`proxy` don't require
     the `chat-proxy` extra to be installed -- only `decoy chat-proxy` does.
+
+    Explicitly constructs and passes a real audit log, matching the
+    `_cmd_audit_*` commands' own pattern above -- CONFIRMED BUG, now
+    fixed: this used to call `chat_proxy_main([...])` with no audit_log
+    at all, so every real `decoy chat-proxy` invocation silently ran with
+    masking-decision logging disabled. Verified directly: sent a real
+    request (containing an email and a PNR) through a running `decoy
+    chat-proxy`, got a genuine upstream response back (proving the
+    masking/request path was reached), and confirmed no audit file
+    anywhere in the repo was touched by it.
     """
     from .chat_proxy import main as chat_proxy_main
 
-    return chat_proxy_main(["--host", args.host, "--port", str(args.port)])
+    return chat_proxy_main(["--host", args.host, "--port", str(args.port)], audit_log=get_default_audit_log())
 
 
 def _cmd_overrides_show(_args: argparse.Namespace) -> int:
