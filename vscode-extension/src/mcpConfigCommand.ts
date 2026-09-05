@@ -116,7 +116,9 @@ export async function runConfigureMcpProxy(context: vscode.ExtensionContext): Pr
     : "";
   const confirmMessage =
     `Decoy will write the following MCP server entry to ${MCP_CONFIG_FILENAME} at the workspace root:` +
-    `\n\n"${DEFAULT_SERVER_NAME}": ${JSON.stringify(entry, null, 2)}${overwriteNote}`;
+    `\n\n"${DEFAULT_SERVER_NAME}": ${JSON.stringify(entry, null, 2)}${overwriteNote}` +
+    `\n\nNote: this does not connect the server automatically. After writing, run "claude" ` +
+    `interactively in this directory and approve the "${DEFAULT_SERVER_NAME}" server when prompted.`;
 
   const choice = await vscode.window.showWarningMessage(confirmMessage, { modal: true }, "Write Config");
   if (choice !== "Write Config") {
@@ -125,8 +127,15 @@ export async function runConfigureMcpProxy(context: vscode.ExtensionContext): Pr
 
   fs.writeFileSync(configPath, serializeMcpConfig(updated), "utf8");
 
+  // Writing .mcp.json does NOT auto-connect the server -- confirmed
+  // directly against a real `claude` CLI: an entry added this way shows
+  // as "Pending approval" until a human approves it interactively.
+  // Naming the exact fix ("run `claude` ... and approve") here, not just
+  // that something is needed, since a user reading only "restart Claude
+  // Code" would reasonably expect that alone to be enough -- it isn't.
   void vscode.window.showInformationMessage(
     `Decoy: wrote "${DEFAULT_SERVER_NAME}" MCP server entry to ${configPath}. ` +
-      `Restart Claude Code (or reload its MCP servers) to pick it up.`,
+      `This does NOT connect it automatically -- .mcp.json entries require one-time approval. ` +
+      `Run "claude" interactively in this directory and approve the "${DEFAULT_SERVER_NAME}" server when prompted.`,
   );
 }

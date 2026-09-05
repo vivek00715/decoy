@@ -88,6 +88,14 @@ Proxy (Claude Code)" in the IntelliJ plugin's Decoy toolbar. No manual
 download/checksum steps needed in that path since the binary ships with
 the extension/plugin itself.
 
+**Writing `.mcp.json` does not connect the server automatically.**
+Confirmed directly against a real `claude` CLI install: an entry added
+this way shows as `⏸ Pending approval (run 'claude' to approve)` until a
+human approves it interactively — both extensions' confirmation dialogs
+name the exact fix, but it's worth stating here too: run `claude`
+interactively in the project directory and approve the server when
+prompted.
+
 ## Chat proxy: masking free text typed directly into a chat interface
 
 `decoy proxy` (above) only covers data flowing through MCP tool calls.
@@ -126,6 +134,16 @@ automatically:
 
 Without both of the above, the chat proxy still works, but its vault is
 private to that process and will diverge from `decoy proxy`'s.
+
+**If `decoy proxy` is registered via `.mcp.json`, one more step applies
+no matter how that entry got there** — by hand, via `claude mcp add
+--scope project`, or via an IDE extension's auto-config: confirmed
+directly against a real `claude` CLI, a `.mcp.json` entry shows as `⏸
+Pending approval (run 'claude' to approve)` and does not connect until a
+human runs `claude` interactively in that directory and approves it. If
+vault-sharing with the chat proxy doesn't seem to be working, check
+`claude mcp list` for a pending entry before assuming the setup above is
+broken.
 
 This proxy has no authentication of its own — see `decoy.chat_proxy`'s
 module docstring for that trust boundary stated precisely (it's meant
@@ -194,11 +212,26 @@ decoy audit clear-all                     # removes overrides too
 
 Optional extras: `pip install -e ".[llm]"` (Anthropic SDK, for
 LLM-assisted relevance classification or answering questions for real),
-`pip install -e ".[mcp]"` (the MCP masking proxy), `pip install -e ".[ner]"`
-(Presidio — the NER backend interface exists but has no wired
-implementation shipped yet). This `pip install` path pulls in Python and
-these dependencies as usual — it is not a zero-dependency install; only
-the standalone binary above avoids needing a Python interpreter at all.
+`pip install -e ".[mcp]"` (the MCP masking proxy), `pip install -e ".[chat-proxy]"`
+(the chat-completions masking proxy — see above), `pip install -e ".[ner]"`
+(Presidio-backed name/address detection for free text). This `pip
+install` path pulls in Python and these dependencies as usual — it is
+not a zero-dependency install; only the standalone binary above avoids
+needing a Python interpreter at all.
+
+**Enabling name/address detection in free text** (bare names typed
+directly into a prompt are NOT masked otherwise — see
+`WHAT_THIS_PROTECTS_AGAINST.md` section 3):
+
+```bash
+pip install -e ".[ner]"
+python -m spacy download en_core_web_lg   # one-time, ~400MB, downloads a language model
+DECOY_USE_PRESIDIO=true decoy chat-proxy ...   # or however you invoke the masking pipeline
+```
+
+Stays opt-in by default (unset `DECOY_USE_PRESIDIO`, or any value other
+than `true`) since it's a real, heavy dependency chain most usage
+doesn't need — not a hidden feature flag with no cost.
 
 ## Running the tests / dependency scans yourself
 

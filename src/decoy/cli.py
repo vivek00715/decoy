@@ -141,7 +141,11 @@ def build_parser() -> argparse.ArgumentParser:
             "over this process's own stdio, masking every tool result before it reaches the "
             "calling client (e.g. Claude Code). Point Claude Code (or any MCP client) at "
             "`decoy proxy -- <target-command> [target-args...]` instead of the target server "
-            "directly."
+            "directly. If you register this in a project's .mcp.json (by hand, via `claude mcp "
+            "add --scope project`, or via an IDE extension's auto-config), it will NOT connect "
+            "automatically -- confirmed directly against a real `claude` CLI, such an entry shows "
+            "as Pending approval until you run `claude` interactively in that directory and "
+            "approve it."
         ),
     )
     proxy.add_argument("--session", default="mcp-proxy", help="session_id to mask/vault under")

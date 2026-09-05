@@ -161,10 +161,21 @@ class ConfigureMcpProxyAction : AnAction() {
         val entryPreview = buildMcpServerEntry(binary.absolutePath, sessionId, targetCommand, targetArgs)
         val prettyEntry = Json { prettyPrint = true }.encodeToString(kotlinx.serialization.json.JsonObject.serializer(), entryPreview)
 
+        // Writing .mcp.json does NOT auto-connect the server -- confirmed
+        // directly against a real `claude` CLI: an entry added this way
+        // shows as "Pending approval" until a human approves it
+        // interactively. Naming the exact fix here, not just that
+        // something is needed -- "restart Claude Code" alone would
+        // reasonably (and wrongly) sound sufficient on its own.
+        val approvalInstruction =
+            "This does NOT connect it automatically -- $MCP_CONFIG_FILENAME entries require one-time " +
+                "approval. Run \"claude\" interactively in this directory and approve the " +
+                "\"$DEFAULT_MCP_SERVER_NAME\" server when prompted."
+
         val confirmed = Messages.showYesNoDialog(
             project,
             "Decoy will write the following MCP server entry to $MCP_CONFIG_FILENAME at the project root:\n\n" +
-                "\"$DEFAULT_MCP_SERVER_NAME\": $prettyEntry",
+                "\"$DEFAULT_MCP_SERVER_NAME\": $prettyEntry\n\n$approvalInstruction",
             "Decoy: Write $MCP_CONFIG_FILENAME?",
             "Write Config",
             "Cancel",
@@ -183,7 +194,7 @@ class ConfigureMcpProxyAction : AnAction() {
             project,
             "Wrote \"$DEFAULT_MCP_SERVER_NAME\" MCP server entry to ${File(service.rootDir, MCP_CONFIG_FILENAME).absolutePath}. " +
                 (if (result.overwritingExisting) "This replaced an existing entry. " else "") +
-                "Restart Claude Code (or reload its MCP servers) to pick it up.",
+                approvalInstruction,
             "Decoy",
         )
     }

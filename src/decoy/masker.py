@@ -25,7 +25,7 @@ from typing import Optional
 from faker import Faker
 
 from .logging_config import get_logger
-from .ner import NERBackend, NERSpan, NoOpNERBackend
+from .ner import NERBackend, NERSpan, NoOpNERBackend, get_default_ner_backend
 from .overrides import OverrideStore, get_default_store
 from .vault import Vault, VaultManager, get_default_manager
 
@@ -55,14 +55,47 @@ API_KEY_RE = re.compile(
 )
 
 DEFAULT_PNR_RE = re.compile(
-    r"\b(?=[A-Z0-9]{5,8}\b)(?=[A-Z0-9]*[0-9])(?=[A-Z0-9]*[A-Z])[A-Z0-9]{5,8}\b"
+    r"\b(?=[A-Z0-9]{5,8}\b)(?=[A-Z0-9]*[0-9])(?=[A-Z0-9]*[A-Z])[A-Z0-9]{5,8}\b",
+    re.IGNORECASE,
 )
+# CONFIRMED GAP (found empirically, then fixed here): DEFAULT_PNR_RE had
+# no re.IGNORECASE. `mask_text("my pnr fghty6")` returned detections=[]
+# -- a lowercase PNR-shaped code was invisible to the regex layer
+# entirely. Real PNRs/booking codes are usually rendered uppercase, but
+# nothing stops a user from typing one in lowercase (autocomplete,
+# copy-paste from a lowercase confirmation email, etc.), and the
+# consequence of missing one is a real code reaching an LLM unmasked --
+# worth the (small) extra false-positive surface of also catching
+# lowercase alphanumeric codes that happen to fit the same shape.
+
+# Context-aware PNR detection: catches a PNR-like code that does NOT fit
+# DEFAULT_PNR_RE's strict shape (too short, no digit, etc.) but sits right
+# next to an explicit keyword naming it as one. This is a DELIBERATE
+# false-positive-tolerant tradeoff, not a silent regex loosening --
+# documented as such in WHAT_THIS_PROTECTS_AGAINST.md. It only fires near
+# one of these keywords, so its false-positive surface is bounded to text
+# that already talks about a booking/confirmation code, not arbitrary
+# alphanumeric words anywhere in a message.
+PNR_CONTEXT_KEYWORD_RE = re.compile(r"\b(?:pnr|booking\s+reference|confirmation\s+number)\b", re.IGNORECASE)
+_CONTEXT_TOKEN_RE = re.compile(r"[A-Za-z0-9]{2,12}")
+# Words that could immediately follow a context keyword without THEMSELVES
+# being the code (e.g. "confirmation number is XY12", "booking reference:
+# ABCDEF") -- skipped so the scan doesn't misfire on the sentence's own
+# grammar/punctuation before it reaches the actual code.
+_CONTEXT_STOPWORDS = {
+    "is", "was", "the", "a", "an", "your", "my", "please", "number", "reference", "code", "id", "for", "of",
+}
+# How far past a keyword match to look for the code -- generous enough
+# for "booking reference number: ABC123" (keyword + 2 filler words +
+# punctuation) without scanning the whole rest of the message.
+_CONTEXT_WINDOW_CHARS = 40
 
 _LAYER_OVERRIDE = "override"
 _LAYER_REGEX = "regex"
 _LAYER_NER = "ner"
+_LAYER_CONTEXT = "context"
 
-_PRIORITY = {_LAYER_OVERRIDE: 3, _LAYER_REGEX: 2, _LAYER_NER: 1}
+_PRIORITY = {_LAYER_OVERRIDE: 3, _LAYER_REGEX: 2, _LAYER_NER: 1, _LAYER_CONTEXT: 0}
 
 
 @dataclass(frozen=True)
@@ -128,7 +161,14 @@ class Masker:
         self.session_id = session_id
         self.vault_manager = vault_manager or get_default_manager()
         self.override_store = override_store or get_default_store()
-        self.ner_backend = ner_backend or NoOpNERBackend()
+        # DECOY_USE_PRESIDIO=true opts into Presidio-backed name/address
+        # detection via a process-wide cached backend (get_default_ner_backend()
+        # -- see ner.py's module docstring: constructing a fresh Presidio
+        # backend takes ~13s, so it must be built once per process, not
+        # once per Masker, and Masker IS constructed fresh per request
+        # throughout this codebase). Explicit `ner_backend=` always wins,
+        # matching every other constructor param's override pattern here.
+        self.ner_backend = ner_backend or get_default_ner_backend()
         pnr_env = pnr_pattern or os.environ.get("DECOY_PNR_PATTERN")
         self.pnr_re = re.compile(pnr_env) if pnr_env else DEFAULT_PNR_RE
         # Faker/random are not thread-safe for a shared instance under
@@ -161,6 +201,34 @@ class Masker:
                 if m.start() == m.end():
                     continue
                 found.append((m.start(), m.end(), label, f"matched {label} regex"))
+        return found
+
+    def _context_detections(self, text: str) -> list[tuple[int, int, str, str]]:
+        """Returns (start, end, label, reason) tuples for a PNR-like code
+        found near a keyword naming it, even when it doesn't fit
+        DEFAULT_PNR_RE's strict shape -- see this module's top-level
+        comment above PNR_CONTEXT_KEYWORD_RE for why this is a deliberate
+        false-positive-tolerant tradeoff, not a silent loosening of the
+        regex layer.
+        """
+        found = []
+        for keyword_match in PNR_CONTEXT_KEYWORD_RE.finditer(text):
+            window_start = keyword_match.end()
+            window_end = min(len(text), window_start + _CONTEXT_WINDOW_CHARS)
+            for token_match in _CONTEXT_TOKEN_RE.finditer(text, window_start, window_end):
+                token = token_match.group()
+                if token.lower() in _CONTEXT_STOPWORDS:
+                    continue
+                found.append(
+                    (
+                        token_match.start(),
+                        token_match.end(),
+                        "PNR",
+                        f"alphanumeric code near {keyword_match.group()!r} keyword (context-aware, "
+                        f"doesn't match the strict PNR shape)",
+                    )
+                )
+                break  # only the first plausible token after each keyword
         return found
 
     def _ner_detections(self, text: str) -> list[NERSpan]:
@@ -220,6 +288,9 @@ class Masker:
             raw_spans.append(
                 (span.start, span.end, span.label, _LAYER_NER, f"matched via NER ({span.label})")
             )
+
+        for start, end, label, reason in self._context_detections(text):
+            raw_spans.append((start, end, label, _LAYER_CONTEXT, reason))
 
         # never_mask suppresses regex/NER matches, but not explicit
         # always_mask matches on the exact same span (an explicit

@@ -38,6 +38,21 @@ X-Decoy-Session-Id) -- there is no automatic way to correlate a chat
 completions request with a specific MCP proxy invocation, and this
 module does not pretend otherwise.
 
+If that MCP-proxy side of the setup is `decoy proxy` registered in a
+project's `.mcp.json` (Claude Code's project-scoped MCP config -- see
+mcp_proxy.py's module docstring), ONE MORE STEP APPLIES REGARDLESS OF HOW
+THAT ENTRY GOT THERE, not just when the IDE extensions' auto-config
+feature wrote it: confirmed directly against a real `claude` CLI, an
+entry in `.mcp.json` shows as `⏸ Pending approval (run 'claude' to
+approve)` and is NOT connected until a human runs `claude` interactively
+in that project directory and approves it. This applies whether the
+entry was hand-written, added via `claude mcp add --scope project`, or
+written by an IDE extension's auto-config -- it is a property of
+`.mcp.json`/project-scope itself, not of how Decoy specifically got the
+entry in there. If you've set up this chat proxy AND `decoy proxy` and
+nothing seems to be sharing state, check `claude mcp list` for a pending
+entry before assuming the vault-sharing wiring above is broken.
+
 Streaming correctness: an upstream text delta can split a fake value
 across two SSE chunks. The risk is one-directional and safe (a split
 fake just fails to unmask -- the client sees an un-reversed fake string,

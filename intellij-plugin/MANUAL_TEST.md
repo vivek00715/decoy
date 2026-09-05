@@ -350,19 +350,33 @@ test exercises.
    flagged as a genuine open risk.
 6. Otherwise: enter a target command (e.g. `npx`) and args (e.g.
    `-y @modelcontextprotocol/server-filesystem /tmp`). **Expected:** a
-   Yes/No dialog shows the exact JSON entry before anything is written.
-   Confirm it.
+   Yes/No dialog shows the exact JSON entry before anything is written,
+   AND explicitly states that this does not connect the server
+   automatically — it should name the exact fix: run `claude`
+   interactively in this directory and approve the "decoy" server when
+   prompted. Confirm it.
 7. **Expected:** `.mcp.json` now exists at the project root with a
    `decoy` entry under `mcpServers`, `command` pointing at the bundled
    binary's absolute path inside the plugin's install directory, `args`
-   starting with `["proxy", "--session", ...]`.
+   starting with `["proxy", "--session", ...]`, and the info dialog that
+   follows repeats the same approval instruction (run `claude`
+   interactively in this directory, approve "decoy" when prompted) — not
+   just "restart Claude Code", which on its own leaves the server
+   permanently pending (see step 9).
 8. Manually add an unrelated entry to `.mcp.json` and re-run the action
    with a different target. **Expected:** the unrelated entry survives
    unchanged and the `decoy` entry is replaced, not duplicated — matching
    `McpConfigWriterTest.kt`'s merge tests.
-9. If you have Claude Code available, point it at this project and
-   confirm it can launch the bundled binary as an MCP server subprocess
-   with no Python required on the machine at all.
+9. If you have Claude Code available: from this same project's directory,
+   run `claude` interactively (plain `claude`, no flags) and approve the
+   "decoy" server when it prompts you — this is the exact, concrete step
+   named in the dialogs above, not paraphrased here. Confirmed directly
+   against a real `claude` CLI install: an entry written to `.mcp.json`
+   shows as `⏸ Pending approval (run 'claude' to approve)` via `claude mcp
+   list`/`claude mcp get decoy` until this step happens — it is not
+   optional polish, the server will not connect without it. After
+   approving, confirm it can launch the bundled binary as an MCP server
+   subprocess with no Python required on the machine at all.
 
 ## Things to watch for that would indicate a real bug, not just "needs polish"
 

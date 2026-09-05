@@ -39,6 +39,59 @@ FAKE_ROWS = [
 ]
 
 
+async def _second_fake_target_list_tools(ctx, params):
+    """A SECOND fake target MCP server, deliberately shaped differently
+    from the ES-row-shaped `_fake_target_*` above -- see this module's
+    docstring in mcp_proxy.py and WHAT_THIS_PROTECTS_AGAINST.md for why
+    this matters: Phase 6's own summary flagged, but nobody had verified,
+    whether the proxy handles a target returning something other than a
+    flat list of dicts (e.g. a GitHub or Slack MCP server, not a
+    database). This stands in for exactly that: a "search issues"-style
+    tool whose structured_content is a dict with a MIX of shapes -- one
+    key holding row-shaped dicts, another holding a plain list of
+    strings -- no uniform {"hits": [...]} of row dicts throughout.
+
+    NOTE on why this isn't an even more bare-bones shape: a genuinely
+    bare string/list at the top level of structured_content was tried
+    first and rejected -- the INSTALLED mcp package's own wire-protocol
+    validation refuses to serialize a non-dict structured_content at all
+    (pydantic: "Input should be a valid dictionary"), confirmed directly
+    by trying it. So the realistically-reachable version of this gap,
+    for a real MCP server using this SDK, is a dict whose VALUES include
+    a non-dict list or bare scalar -- exactly what's built below, and
+    exactly the shape that was still leaking real emails after the first
+    round of this fix (see mcp_proxy.py's _mask_json_value dict-branch
+    comment for the precise mixed-keys gap this closes).
+    """
+    return types.ListToolsResult(
+        tools=[
+            types.Tool(
+                name="search_issues",
+                description="search issue comments (GitHub/Slack-style, not a database)",
+                inputSchema={"type": "object", "properties": {}},
+            )
+        ]
+    )
+
+
+async def _second_fake_target_call_tool(ctx, params: types.CallToolRequestParams):
+    if params.name != "search_issues":
+        return types.CallToolResult(
+            content=[types.TextContent(type="text", text=f"unknown tool {params.name}")], is_error=True
+        )
+    # "hits" is row-shaped (list of dicts) -- already worked before this
+    # fix. "warnings" is a plain list of strings under the SAME dict --
+    # this is the key that used to pass through completely unmasked,
+    # confirmed directly before the fix.
+    return types.CallToolResult(
+        content=[types.TextContent(type="text", text="Found 1 matching issue.")],
+        structured_content={
+            "hits": [{"assignee_email": "alice@example.com"}],
+            "warnings": ["contact dave.chen@example.com for details"],
+        },
+    )
+
+
 async def _fake_target_list_tools(ctx, params):
     return types.ListToolsResult(
         tools=[
@@ -59,13 +112,24 @@ async def _fake_target_call_tool(ctx, params: types.CallToolRequestParams):
     return types.CallToolResult(content=[types.TextContent(type="text", text=json.dumps(FAKE_ROWS))])
 
 
-async def _run_full_stack(override_store, vault_manager, session_id, test_body):
+async def _run_full_stack(
+    override_store, vault_manager, session_id, test_body, target_list_tools=None, target_call_tool=None
+):
     """Wire up: fake target server <-(memory streams)-> proxy's ClientSession
     -(MaskingProxy)- proxy's Server <-(memory streams)-> test ClientSession,
     then run `test_body(test_session)`.
+
+    `target_list_tools`/`target_call_tool` default to the ES-row-shaped
+    fake target (_fake_target_list_tools/_fake_target_call_tool) that
+    every existing test in this file uses -- pass a different pair (see
+    _second_fake_target_call_tool below) to prove the proxy against a
+    target with a genuinely DIFFERENT result shape, not just a different
+    row's worth of the same shape.
     """
     target_server = Server(
-        "fake-target", on_list_tools=_fake_target_list_tools, on_call_tool=_fake_target_call_tool
+        "fake-target",
+        on_list_tools=target_list_tools or _fake_target_list_tools,
+        on_call_tool=target_call_tool or _fake_target_call_tool,
     )
 
     async with create_client_server_memory_streams() as (target_client_streams, target_server_streams):
@@ -108,6 +172,58 @@ async def _run_full_stack(override_store, vault_manager, session_id, test_body):
                         await test_body(test_session, proxy)
 
                 tg.cancel_scope.cancel()
+
+
+def test_mask_json_value_bare_scalar_string_is_masked(override_store, vault_manager):
+    """Unit-level regression for gap 1 (see mcp_proxy.py's
+    _mask_json_value docstring): a bare string used to pass through
+    _mask_json_value completely unmasked."""
+    from decoy.mcp_proxy import _mask_json_value
+
+    result = _mask_json_value("Contact: alice@example.com", "s1", override_store, vault_manager)
+    assert "alice@example.com" not in result
+    assert "@" in result  # still a plausible fake email (Faker's example.com/.org/.net domains vary)
+
+
+def test_mask_json_value_list_of_non_dict_items_is_masked(override_store, vault_manager):
+    """Unit-level regression for gap 2: a list that isn't uniformly dict
+    rows used to pass through unmasked."""
+    from decoy.mcp_proxy import _mask_json_value
+
+    result = _mask_json_value(["bob@example.com", "alice@example.com"], "s1", override_store, vault_manager)
+    assert "bob@example.com" not in result
+    assert "alice@example.com" not in result
+    assert len(result) == 2
+
+
+def test_mask_json_value_list_of_non_dict_items_nested_under_a_dict_key_is_masked(override_store, vault_manager):
+    """Unit-level regression for gap 3 -- the one only found while
+    building the end-to-end test, not from re-reading the code: a dict
+    with a MIX of a row-shaped key and a plain-list-of-strings key used
+    to leak the plain-list key entirely, since the old code returned as
+    soon as it found ANY list-of-dicts key."""
+    from decoy.mcp_proxy import _mask_json_value
+
+    result = _mask_json_value(
+        {"hits": [{"email": "alice@example.com"}], "warnings": ["contact dave.chen@example.com for details"]},
+        "s1",
+        override_store,
+        vault_manager,
+    )
+    assert "alice@example.com" not in str(result)
+    assert "dave.chen@example.com" not in str(result)
+    assert "@" in result["hits"][0]["email"]
+    assert "@" in result["warnings"][0]
+
+
+def test_mask_json_value_list_of_non_string_scalars_unaffected(override_store, vault_manager):
+    """Sanity check: the fix for gaps 1/2/3 must not start trying to
+    mask non-string scalars (numbers, bools, None) -- there's nothing
+    PII-shaped about them and this function never handled them before."""
+    from decoy.mcp_proxy import _mask_json_value
+
+    result = _mask_json_value([1, 2, 3, True, None], "s1", override_store, vault_manager)
+    assert result == [1, 2, 3, True, None]
 
 
 async def test_dynamic_tool_discovery_and_masked_result(override_store, vault_manager):
@@ -178,6 +294,40 @@ async def test_shared_vault_gives_same_fake_as_direct_masker_call(override_store
         assert direct_fake == proxy_fake_email
 
     await _run_full_stack(override_store, vault_manager, session_id, body)
+
+
+async def test_non_row_shaped_target_mixed_structured_content_is_fully_masked(override_store, vault_manager):
+    """End-to-end proof (real proxy stack, real SECOND fake target with a
+    genuinely different shape from the ES-row-shaped target every other
+    test in this file uses -- not a unit-level call to _mask_json_value
+    in isolation) that a target's structured_content with a MIX of a
+    row-shaped key and a plain-list-of-strings key gets BOTH keys masked,
+    not just the row-shaped one. Confirmed as a real gap before this fix:
+    this exact call came back with "hits" masked but "warnings" leaking
+    the real email verbatim."""
+    session_id = str(uuid.uuid4())
+
+    async def body(test_session: ClientSession, proxy: MaskingProxy):
+        result = await test_session.call_tool("search_issues", {})
+        assert not result.is_error
+        structured = result.structured_content
+
+        assert "alice@example.com" not in str(structured)
+        assert "dave.chen@example.com" not in str(structured)  # the actual confirmed gap
+        # "@" not a specific domain: Faker's fake emails vary across
+        # example.com/.org/.net, so pinning to .com here was its own
+        # flaky test bug (confirmed by repeated runs), not a product bug.
+        assert "@" in structured["hits"][0]["assignee_email"]  # still a plausible fake
+        assert "@" in structured["warnings"][0]
+
+    await _run_full_stack(
+        override_store,
+        vault_manager,
+        session_id,
+        body,
+        target_list_tools=_second_fake_target_list_tools,
+        target_call_tool=_second_fake_target_call_tool,
+    )
 
 
 async def test_target_failure_does_not_crash_proxy(override_store, vault_manager):

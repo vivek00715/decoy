@@ -322,6 +322,28 @@ _case(
     planted_pii=["QR4092"],
 )
 _case(
+    id="ft-pnr-lowercase-code-1",
+    description=(
+        "the PNR CODE ITSELF is lowercase, not just the surrounding sentence -- a confirmed gap: "
+        "mask_text('my pnr fghty6') returned detections=[] before DEFAULT_PNR_RE gained "
+        "re.IGNORECASE (see masker.py's top-level comment above DEFAULT_PNR_RE). Distinct from "
+        "ft-pnr-lowercase-context-1 above, whose planted code stays uppercase."
+    ),
+    question="my pnr fghty6",
+    planted_pii=["fghty6"],
+)
+_case(
+    id="ft-pnr-context-aware-1",
+    description=(
+        "a booking-reference code that does NOT fit DEFAULT_PNR_RE's strict shape (no digit at "
+        "all) but sits right next to the keyword naming it -- only caught by the new "
+        "context-aware fallback (masker.py's PNR_CONTEXT_KEYWORD_RE), a deliberate "
+        "false-positive-tolerant tradeoff documented in WHAT_THIS_PROTECTS_AGAINST.md"
+    ),
+    question="your booking reference is ABCDEF, keep it safe",
+    planted_pii=["ABCDEF"],
+)
+_case(
     id="ft-ssn-with-dashes-varied-1",
     description="an SSN with a different digit pattern to catch any off-by-one in the regex boundary",
     question="Please cross-check SSN 000-11-2222 against the applicant database.",

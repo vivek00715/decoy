@@ -64,6 +64,54 @@ def test_round_trip_paragraph(vault_manager, override_store):
     assert unmasked == text
 
 
+def test_lowercase_pnr_is_detected_case_insensitively(vault_manager, override_store):
+    """Regression test for a confirmed gap: DEFAULT_PNR_RE had no
+    re.IGNORECASE, so mask_text("my pnr fghty6") returned
+    detections=[] entirely -- a lowercase PNR-shaped code was invisible
+    to the regex layer. Verified directly before the fix; must never
+    silently reappear."""
+    masker = make_masker(vault_manager, override_store)
+    result = masker.mask_text("my pnr fghty6")
+
+    assert result.detections, "expected the lowercase PNR-shaped code to be detected"
+    assert "fghty6" not in result.masked_text
+    labels = {d.label for d in result.detections}
+    assert "PNR" in labels
+    layers = {d.layer for d in result.detections}
+    assert "regex" in layers  # caught by the regex layer itself, not the context fallback
+
+
+def test_context_aware_pnr_detection_catches_codes_that_fail_the_strict_shape(vault_manager, override_store):
+    """A PNR-like code near an explicit keyword ("PNR", "booking
+    reference", "confirmation number") is masked even when it doesn't
+    fit DEFAULT_PNR_RE's strict 5-8 char / has-a-digit-and-a-letter shape
+    -- a deliberate false-positive-tolerant tradeoff (documented in
+    WHAT_THIS_PROTECTS_AGAINST.md), gated on keyword proximity so it
+    doesn't fire on arbitrary alphanumeric words."""
+    masker = make_masker(vault_manager, override_store)
+
+    # Fails the strict shape: no digit at all.
+    result = masker.mask_text("your booking reference is ABCDEF, keep it safe")
+    assert "ABCDEF" not in result.masked_text
+    assert any(d.layer == "context" and d.label == "PNR" for d in result.detections)
+
+    # Fails the strict shape: only 4 chars (shape requires 5-8).
+    result2 = masker.mask_text("confirmation number: XY12")
+    assert "XY12" not in result2.masked_text
+    assert any(d.layer == "context" and d.label == "PNR" for d in result2.detections)
+
+
+def test_context_aware_pnr_detection_does_not_fire_without_a_keyword(vault_manager, override_store):
+    """The context-aware fallback is gated on keyword proximity, not a
+    blanket "any alphanumeric word" scan -- confirms the false-positive
+    tolerance is bounded to text that already names a booking/
+    confirmation code, not arbitrary prose."""
+    masker = make_masker(vault_manager, override_store)
+    result = masker.mask_text("please review my abcdef report by friday")
+    assert result.detections == []
+    assert result.masked_text == "please review my abcdef report by friday"
+
+
 def test_consistent_fake_across_calls(vault_manager, override_store):
     session_id = str(uuid.uuid4())
     masker1 = make_masker(vault_manager, override_store, session_id)

@@ -94,8 +94,44 @@ def _mask_json_value(
 ) -> Any:
     """Mask a JSON-shaped tool result: a list of dict rows, a dict
     wrapping such a list (e.g. {"hits": [...]}), or a single flat dict
-    record. Anything else (scalars, lists of scalars) is returned as-is
-    -- record_masker.py classifies columns, so it needs row-shaped data.
+    record -- row-shaped data goes through record_masker.py's column
+    classification, same as every other entry point.
+
+    CONFIRMED GAPS, now fixed (found empirically, not assumed -- see
+    mcp_proxy.py's module docstring for the "known limitation" this
+    replaces) -- THREE dead ends, not the two originally suspected:
+
+    1. A bare string passed to this function directly returned unchanged
+       -- `_mask_json_value("Contact: alice@example.com", ...)` came back
+       byte-for-byte identical. Fixed: now masked via the same free-text
+       `Masker` `_mask_text_block` already uses for TextContent blocks.
+    2. A list that isn't uniformly dict rows (e.g. a list of plain
+       strings) also returned unchanged --
+       `_mask_json_value(["bob@example.com", "alice@example.com"], ...)`
+       leaked both. Fixed by recursing: every element is now masked
+       individually (a dict element goes through the row-shaped path via
+       recursion; a string element through the free-text layer; a
+       number/bool/None left as-is).
+    3. **Found only while building an end-to-end test for the other two,
+       not from re-reading the code more carefully** -- a dict with a
+       MIX of keys (one holding row-shaped dicts, another holding a
+       plain list of strings, or any other scalar) used to return every
+       key EXCEPT the row-shaped one completely unmasked, because the
+       old code returned as soon as it found any list-of-dicts key. This
+       is the practically-reachable version of gap 2 for a REAL target
+       using the installed `mcp` package: its own wire-protocol
+       validation refuses to serialize a non-dict structured_content at
+       all (confirmed directly: constructing one with a bare string
+       raised a pydantic `ValidationError`), so a real target can only
+       ever send gap 1/2's bare shapes nested inside a dict -- which is
+       exactly gap 3. Fixed the same way: every key not already handled
+       by the list-of-dicts branch is now recursively masked too.
+
+    See tests/test_mcp_proxy_phase6.py's
+    `test_non_row_shaped_target_mixed_structured_content_is_fully_masked`
+    for a real end-to-end reproduction (a second fake target MCP server,
+    genuinely different in shape from the row-shaped one every other test
+    in that file uses) -- not just a unit-level check of this function.
 
     `audit_log`/`request_id`, if given, are forwarded to mask_records with
     source="mcp_tool_result" -- this proxy is a third entry point into the
@@ -115,25 +151,48 @@ def _mask_json_value(
         if value and all(isinstance(v, dict) for v in value):
             masked, _decisions = mask_records(value, **mask_kwargs)
             return masked
-        return value
+        return [
+            _mask_json_value(item, session_id, override_store, vault_manager, audit_log, request_id)
+            for item in value
+        ]
 
     if isinstance(value, dict):
-        masked_dict: dict[str, Any] = {}
-        replaced_any_list = False
-        for key, val in value.items():
-            if isinstance(val, list) and val and all(isinstance(item, dict) for item in val):
-                masked_rows, _decisions = mask_records(val, **mask_kwargs)
-                masked_dict[key] = masked_rows
-                replaced_any_list = True
-            else:
-                masked_dict[key] = val
-        if replaced_any_list:
+        list_of_dict_keys = {
+            key for key, val in value.items() if isinstance(val, list) and val and all(isinstance(item, dict) for item in val)
+        }
+        if list_of_dict_keys:
+            # CONFIRMED GAP, now fixed: a dict with a MIX of keys -- one
+            # holding a list of dicts (handled below via mask_records)
+            # and ANOTHER holding a list of plain strings, or a bare
+            # string/other scalar -- used to return that other key's
+            # value completely unmasked (the old code returned as soon
+            # as it found ANY list-of-dicts key, copying every other key
+            # through untouched). Verified directly: {"hits":
+            # [{"email": "alice@example.com"}], "warnings": ["contact
+            # dave.chen@example.com for details"]} came back with "hits"
+            # masked but "warnings" untouched, leaking the real email.
+            # Every key is now handled -- list-of-dicts keys via
+            # mask_records (row-shaped column classification), every
+            # other key by recursing back into this function.
+            masked_dict: dict[str, Any] = {}
+            for key, val in value.items():
+                if key in list_of_dict_keys:
+                    masked_rows, _decisions = mask_records(val, **mask_kwargs)
+                    masked_dict[key] = masked_rows
+                else:
+                    masked_dict[key] = _mask_json_value(
+                        val, session_id, override_store, vault_manager, audit_log, request_id
+                    )
             return masked_dict
         if value:
             # a single flat record, e.g. one Elasticsearch _source document
             masked, _decisions = mask_records([value], **mask_kwargs)
             return masked[0]
         return value
+
+    if isinstance(value, str):
+        masker = Masker(session_id=session_id, override_store=override_store, vault_manager=vault_manager)
+        return masker.mask_text(value, audit_log=audit_log, request_id=request_id).masked_text
 
     return value
 

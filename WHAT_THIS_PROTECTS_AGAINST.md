@@ -105,19 +105,53 @@ An LLM-assisted relevance classification mode also exists
 opt-in alternative to keyword matching — see the Network Calls section
 below for exactly what it sends.
 
-## 3. Free-text NER: not currently wired
+## 3. Free-text NER: opt-in, not on by default
 
-`masker.py`'s pluggable NER interface (`ner.py`) exists so a real
-name/address entity detector (Presidio is the intended backend) can be
-added, but as of this writing `NoOpNERBackend` — a placeholder that
-detects nothing — is the only implementation. **A bare person name or
-street address typed directly into a prompt is NOT masked by default**;
-only well-formatted patterns (email, phone, SSN, etc.) are caught by the
-regex layer. This is why the benchmark suite's free-text test cases never
-plant a bare name as PII in a question — doing so would report a false
-"leak" for a documented, known gap, not a regression. Database/record
-values don't have this gap: `record_masker.py`'s deny-by-default rule
-masks every non-shape-safe column by content, name detector or not.
+`masker.py`'s pluggable NER interface (`ner.py`) has a real, working
+Presidio-backed implementation (`PresidioNERBackend`), but
+`NoOpNERBackend` — a placeholder that detects nothing — remains the
+DEFAULT. **A bare person name or street address typed directly into a
+prompt is NOT masked unless you explicitly opt in** with
+`DECOY_USE_PRESIDIO=true` (plus `pip install "decoy[ner]"` and a
+downloaded spaCy model — see README.md). Verified directly:
+`mask_text("Please reach out to Sarah about the invoice.")` returns
+`detections=[]` by default, and correctly detects `"Sarah"` as `PERSON`
+once Presidio is enabled. It stays opt-in rather than on-by-default for
+two concrete reasons, not just caution: (1) it's a genuinely heavy
+dependency chain (spaCy plus a ~400MB language model, confirmed by
+actually installing it), not something every `pip install decoy` user
+should be forced to pull in; (2) a fresh `PresidioNERBackend` takes
+~13 real seconds to construct (it loads that model) — Decoy's own
+`Masker` is built fresh per request throughout this codebase, so this
+is cached process-wide (`ner.get_default_ner_backend()`), but the
+underlying cost is real and worth knowing about before enabling it on a
+latency-sensitive path.
+
+This is why the benchmark suite's free-text test cases don't plant a
+bare name as PII in a DEFAULT-condition question — doing so would report
+a false "leak" for a documented, opt-in gap, not a regression. Database/
+record values don't have this gap: `record_masker.py`'s deny-by-default
+rule masks every non-shape-safe column by content, name detector or not.
+
+**PNR/booking-code detection: two fixes, one of them a deliberate
+false-positive-tolerant tradeoff.** `masker.py`'s PNR regex was
+confirmed case-sensitive-only (`mask_text("my pnr fghty6")` returned
+`detections=[]` before this was fixed) and is now case-insensitive.
+Separately, a NEW context-aware detector
+(`PNR_CONTEXT_KEYWORD_RE`/`Masker._context_detections`) masks an
+alphanumeric code that does NOT fit the strict PNR shape (too short, or
+missing a digit) whenever it sits next to an explicit keyword — "PNR",
+"booking reference", "confirmation number" — naming it as one.
+This is intentionally loose: it will occasionally mask a word that
+happens to follow one of those keywords but isn't actually a code, in
+exchange for not missing a real one. The false-positive surface is
+bounded to text that already talks about a booking/confirmation code
+(gated on keyword proximity, not a blanket scan of every alphanumeric
+word), and this tradeoff is a deliberate choice, not an accidental
+loosening of the regex layer's normal precision — see
+`tests/test_masker_phase1.py`'s
+`test_context_aware_pnr_detection_does_not_fire_without_a_keyword` for
+the boundary this is held to.
 
 ## 4. Manual overrides: the correction mechanism, not a footnote
 

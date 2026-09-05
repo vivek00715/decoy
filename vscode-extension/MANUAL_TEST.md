@@ -262,11 +262,18 @@ there should be zero references).
 5. **Expected:** a modal confirmation appears showing the exact JSON
    entry that will be written (`command` pointing at the bundled
    binary's absolute path, `args` starting with
-   `["proxy", "--session", ...]`) before anything touches disk. Click
+   `["proxy", "--session", ...]`) before anything touches disk, AND
+   explicitly states that this does not connect the server automatically
+   -- it should name the exact fix: run `claude` interactively in this
+   directory and approve the "decoy" server when prompted. Click
    **Write Config**.
 6. **Expected:** `.mcp.json` now exists at the workspace root containing
-   a `decoy` entry under `mcpServers` matching what was shown, and a
-   confirmation message names the exact path written.
+   a `decoy` entry under `mcpServers` matching what was shown, and the
+   confirmation message names the exact path written AND repeats the
+   same approval instruction (run `claude` interactively in this
+   directory, approve "decoy" when prompted) -- not just "restart Claude
+   Code", which on its own would leave the server permanently pending,
+   confirmed directly against a real `claude` CLI (see Test 9 below).
 7. Re-run the command with a different target command. **Expected:** the
    confirmation message explicitly says the existing `decoy` entry will
    be REPLACED, and after confirming, `.mcp.json`'s `decoy` entry
@@ -275,12 +282,20 @@ there should be zero references).
    `"other-server": {"command": "foo", "args": []}`) and re-run the
    command. **Expected:** after writing, `other-server` is still present
    unchanged -- confirming the merge doesn't clobber unrelated config.
-9. If you have Claude Code available: point it at this workspace and
-   confirm it can actually launch the bundled `decoy-proxy` binary as an
-   MCP server subprocess (no Python error, no "command not found") and
-   that tool calls through it produce masked results matching the rest
-   of this project's masking behavior. This is the strongest real-world
-   confirmation of the "no Python required" story.
+9. If you have Claude Code available: from this same workspace directory,
+   run `claude` interactively (plain `claude`, no flags) and approve the
+   "decoy" server when it prompts you -- this is the exact, concrete step
+   named in the confirmation/info messages above, not paraphrased here.
+   Confirmed directly against a real `claude` CLI install: an entry
+   written to `.mcp.json` shows as `⏸ Pending approval (run 'claude' to
+   approve)` via `claude mcp list`/`claude mcp get decoy` until this step
+   happens -- it is not optional polish, the server will not connect
+   without it. After approving, confirm it can actually launch the
+   bundled `decoy-proxy` binary as an MCP server subprocess (no Python
+   error, no "command not found") and that tool calls through it produce
+   masked results matching the rest of this project's masking behavior.
+   This is the strongest real-world confirmation of the "no Python
+   required" story.
 10. On a platform with no bundled binary for the running machine's
     `process.platform`-`process.arch` (e.g. only macOS was bundled, but
     you're running the Extension Development Host on Linux), running the
