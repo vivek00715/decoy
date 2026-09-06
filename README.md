@@ -15,6 +15,61 @@ and why manual overrides exist as the correction mechanism for automated
 detection's known limits. No absolute-privacy claims are made anywhere
 in this project, including there.
 
+## Who this is actually for, as currently architected
+
+**Developers and teams who already have (or are willing to get) a
+separate, billed Anthropic API key** — not every Claude subscriber.
+Stated plainly rather than left implicit: a **Claude Pro or Max
+subscription's login does not authenticate the chat proxy's onward call
+to Anthropic.** Confirmed directly on a real Claude Code install: the
+subscription's credentials live under a completely separate `oauthAccount`
+identity (its own billing type, seat tier, organization) that Claude
+Code itself uses for *its own* interactive sessions — the chat proxy
+(below) makes its own, separate HTTP calls to Anthropic's API, which
+requires an `ANTHROPIC_API_KEY` from console.anthropic.com, billed
+per-token independently of any Pro/Max subscription. If you only have a
+Pro/Max subscription and no interest in a separate metered API key, the
+chat proxy genuinely isn't for you yet — the MCP proxy (`decoy proxy`,
+which masks tool-call results Claude Code already fetches through its
+own subscribed session) is likely still useful on its own.
+
+This is a real cost and setup barrier, not just a UX rough edge that
+automation removes — the IDE extensions can spawn the proxy, store the
+key securely, and wire the config for you (see below), but they cannot
+make the API key itself free or optional.
+
+## ⚠ The single largest known risk before a real release: Windows is unverified
+
+Every piece of cross-process coordination this project depends on —
+sharing one vault between `decoy proxy` and `decoy chat-proxy`, the
+audit log, the encryption key file — is guarded by `filelock`, chosen
+specifically because `fcntl` (the POSIX-only alternative) fails to
+*import* at all on Windows. That choice has only ever been exercised on
+macOS/POSIX in every environment that has worked on this project so far
+— **no Windows environment has ever been available to actually run it
+on.** This is not a minor footnote or an edge case: Windows is a primary
+target platform for this project's real end-to-end use, a large fraction
+of real users will be on it, and this specific mechanism has never once
+been confirmed there.
+
+**If you're on Windows, run this before trusting any of the above:**
+
+```powershell
+git clone <this-repo-url>
+cd decoy
+python -m venv .venv
+.venv\Scripts\Activate.ps1
+pip install -e ".[dev]"
+python -m pytest tests/test_vault_cross_process.py tests/test_audit_log_cross_process.py tests/test_crypto_key_cross_process.py -v
+```
+
+Expected: **4 passed** (10-12 real separate `python` subprocesses per
+test, racing to mutate/create the same file — the exact repro shape that
+originally found three real cross-process bugs on macOS). If any fail
+specifically on Windows, that is a genuine, actionable `filelock`/
+`msvcrt` finding, not a flake, and should block treating this as
+release-ready on that platform until resolved.
+
 ## What's in this repo
 
 | Component | Language | Status |

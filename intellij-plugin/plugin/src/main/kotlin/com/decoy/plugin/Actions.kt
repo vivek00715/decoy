@@ -199,3 +199,42 @@ class ConfigureMcpProxyAction : AnAction() {
         )
     }
 }
+
+/**
+ * Chat proxy lifecycle + API key toolbar actions -- functional-parity
+ * pass with VS Code's Start/Stop/Restart/Set-API-Key buttons, done as
+ * toolbar AnActions (matching this plugin's existing pattern -- Refresh,
+ * Clear Session, Configure MCP Proxy above are all toolbar actions too)
+ * rather than in-webview buttons; visual parity with VS Code's in-panel
+ * buttons is an explicit, separate fast-follow, not part of this pass.
+ * All four are thin: the actual logic lives in DecoyProjectService,
+ * itself built on the genuinely-tested `core` modules (ApiKeyStore.kt,
+ * ChatProxyProcessManager.kt, ClaudeSettingsWriter.kt, McpApproval.kt).
+ */
+class StartChatProxyAction : AnAction() {
+    override fun actionPerformed(e: AnActionEvent) {
+        val project = e.project ?: return
+        project.service<DecoyProjectService>().startChatProxy()
+    }
+}
+
+class StopChatProxyAction : AnAction() {
+    override fun actionPerformed(e: AnActionEvent) {
+        val project = e.project ?: return
+        project.service<DecoyProjectService>().stopChatProxy()
+    }
+}
+
+class RestartChatProxyAction : AnAction() {
+    override fun actionPerformed(e: AnActionEvent) {
+        val project = e.project ?: return
+        project.service<DecoyProjectService>().restartChatProxy()
+    }
+}
+
+class SetApiKeyAction : AnAction() {
+    override fun actionPerformed(e: AnActionEvent) {
+        val project = e.project ?: return
+        project.service<DecoyProjectService>().setApiKey()
+    }
+}

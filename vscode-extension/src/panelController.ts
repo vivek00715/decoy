@@ -24,6 +24,16 @@ export interface PanelHost {
    * `message` describing exactly what will happen. Returns whether the
    * user confirmed. */
   confirmDestructive(message: string): Promise<boolean>;
+  /** Chat proxy lifecycle status for rendering -- optional (defaults to
+   * "stopped, unknown port") so existing PanelHost fixtures/tests that
+   * predate the chat-proxy phase don't all need updating just to keep
+   * compiling. Real wiring: extension.ts's host reads this from a live
+   * ChatProxyManager instance. */
+  getProxyStatus?(): { state: string; detail?: string; port: number };
+  /** Cached result of the last MCP-approval check (see mcpApproval.ts) --
+   * undefined means "never checked yet", NOT "confirmed fine". Also
+   * optional for the same backward-compatibility reason as above. */
+  getApprovalStatus?(): { status: string; message?: string } | undefined;
 }
 
 export type WebviewMessage =
@@ -56,6 +66,8 @@ export class PanelController {
       nonce: this.host.generateNonce(),
       codiconsUri: this.host.codiconsUri,
       requestCount: groups.length,
+      proxyStatus: this.host.getProxyStatus?.() ?? { state: "stopped", port: 8787 },
+      approvalStatus: this.host.getApprovalStatus?.(),
     });
     this.host.postHtml(html);
   }

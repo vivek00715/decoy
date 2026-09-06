@@ -6,6 +6,7 @@ const OPTIONS = {
   nonce: "test-nonce",
   codiconsUri: "vscode-webview://abc/codicon.css",
   requestCount: 0,
+  proxyStatus: { state: "stopped", port: 8787 },
 };
 
 function makeGroup(overrides: Partial<RequestGroup> = {}): RequestGroup {
@@ -144,6 +145,51 @@ describe("buildWebviewHtml", () => {
     const html = buildWebviewHtml([], emptyOverridesFile(), OPTIONS);
     expect(html).toContain("new RegExp(value)");
     expect(html).toContain("Not a valid regular expression");
+  });
+
+  it("renders chat proxy status and lifecycle buttons, enabling/disabling by state", () => {
+    const running = buildWebviewHtml([], emptyOverridesFile(), { ...OPTIONS, proxyStatus: { state: "running", port: 8787 } });
+    expect(running).toContain("port 8787");
+    expect(running).toMatch(/id="start-proxy-btn"[^>]*disabled/);
+    expect(running).not.toMatch(/id="stop-proxy-btn"[^>]*disabled/);
+
+    const stopped = buildWebviewHtml([], emptyOverridesFile(), { ...OPTIONS, proxyStatus: { state: "stopped", port: 8787 } });
+    expect(stopped).not.toMatch(/id="start-proxy-btn"[^>]*disabled/);
+    expect(stopped).toMatch(/id="stop-proxy-btn"[^>]*disabled/);
+  });
+
+  it("renders the proxy error detail when state is error", () => {
+    const html = buildWebviewHtml([], emptyOverridesFile(), {
+      ...OPTIONS,
+      proxyStatus: { state: "error", port: 8787, detail: "port already in use" },
+    });
+    expect(html).toContain("port already in use");
+  });
+
+  it("shows the approval banner with the exact action message when pending, and omits it otherwise", () => {
+    const pending = buildWebviewHtml([], emptyOverridesFile(), {
+      ...OPTIONS,
+      approvalStatus: { status: "pending", message: "run claude and approve it" },
+    });
+    expect(pending).toContain('id="approval-banner"');
+    expect(pending).toContain("run claude and approve it");
+
+    const approved = buildWebviewHtml([], emptyOverridesFile(), {
+      ...OPTIONS,
+      approvalStatus: { status: "approved" },
+    });
+    expect(approved).not.toContain('id="approval-banner"');
+
+    const unset = buildWebviewHtml([], emptyOverridesFile(), OPTIONS);
+    expect(unset).not.toContain('id="approval-banner"');
+  });
+
+  it("posts the four new proxy-lifecycle commands from their respective buttons", () => {
+    const html = buildWebviewHtml([], emptyOverridesFile(), OPTIONS);
+    expect(html).toContain('command: "startChatProxy"');
+    expect(html).toContain('command: "stopChatProxy"');
+    expect(html).toContain('command: "restartChatProxy"');
+    expect(html).toContain('command: "setApiKey"');
   });
 
   it("has two distinctly-labeled clear buttons with no unstated exception on 'Clear All'", () => {

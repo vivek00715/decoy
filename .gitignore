@@ -6,14 +6,24 @@ venv/
 *.egg-info/
 .pytest_cache/
 .env
-.decoy/vault.key
-.decoy/vault.key.lock
-.decoy/*.local.json
-.decoy/audit.enc
-.decoy/audit.enc.lock
-.decoy/vault.enc
-.decoy/vault.enc.lock
-.decoy/audit.log*
+# A pattern containing a "/" (other than a trailing one) is anchored to
+# this file's own directory in git's gitignore semantics -- the entries
+# below only ever matched a `.decoy/` at the repo ROOT. Confirmed
+# empirically as a real gap: running this project's own tests from
+# vscode-extension/ or intellij-plugin/ (both spawn a real decoy
+# chat-proxy process, which creates its own local .decoy/ under whatever
+# cwd it inherits) left a real vault.key sitting untracked-but-NOT-
+# ignored under vscode-extension/.decoy/ -- `git check-ignore` confirmed
+# it matched nothing. The leading `**/` below matches `.decoy/` at any
+# depth, closing that gap for good instead of anchoring to one location.
+**/.decoy/vault.key
+**/.decoy/vault.key.lock
+**/.decoy/*.local.json
+**/.decoy/audit.enc
+**/.decoy/audit.enc.lock
+**/.decoy/vault.enc
+**/.decoy/vault.enc.lock
+**/.decoy/audit.log*
 node_modules/
 dist/
 out/

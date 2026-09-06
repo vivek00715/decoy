@@ -217,7 +217,21 @@ private fun renderWebviewOverrideSection(kind: String, label: String, rules: Ove
     return sb.toString()
 }
 
-fun renderWebviewHtml(groups: List<RequestGroup>, overrides: OverridesFile, theme: WebviewTheme): String {
+/**
+ * `proxyStatusLine`/`approvalMessage`, if given, render as visible
+ * banners at the top of the panel -- Phase "remove manual setup steps"
+ * added these so the chat proxy's running/stopped/error state and an
+ * MCP "Pending approval" gate are surfaced IN THE PANEL, not just
+ * documented in MANUAL_TEST.md. Both default to null so every existing
+ * call site (and WebviewContentTest.kt) is unaffected.
+ */
+fun renderWebviewHtml(
+    groups: List<RequestGroup>,
+    overrides: OverridesFile,
+    theme: WebviewTheme,
+    proxyStatusLine: String? = null,
+    approvalMessage: String? = null,
+): String {
     val requestsHtml = if (groups.isEmpty()) {
         """
         <div class="empty-state">
@@ -310,6 +324,9 @@ fun renderWebviewHtml(groups: List<RequestGroup>, overrides: OverridesFile, them
         .decision-redacted { background: color-mix(in srgb, var(--red) 22%, transparent); color: var(--red); }
         .decision-left { background: color-mix(in srgb, var(--green) 22%, transparent); color: var(--green); }
         .override-flag { font-size: 12px; color: var(--orange); margin-left: 4px; }
+        .proxy-status-line { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--desc-fg); margin: 0 0 8px; }
+        .approval-banner { display: flex; align-items: flex-start; gap: 8px; background: color-mix(in srgb, var(--orange) 16%, transparent); border: 1px solid var(--orange); border-radius: var(--radius); padding: 8px 12px; margin: 0 0 12px; font-size: 12px; }
+        .approval-banner .codicon { color: var(--orange); font-size: 16px; margin-top: 1px; }
         .override-section { border: 1px solid var(--border); border-radius: var(--radius); padding: 8px 12px 12px; margin: 0 0 8px; }
         .override-section legend { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--desc-fg); padding: 0 4px; }
         .override-list { list-style: none; padding: 0; margin: 0 0 8px; }
@@ -351,6 +368,9 @@ fun renderWebviewHtml(groups: List<RequestGroup>, overrides: OverridesFile, them
         </header>
 
         <p class="pending-banner" id="pending-banner"><span class="codicon codicon-loading spin"></span>Updating&hellip;</p>
+
+        ${if (proxyStatusLine != null) "<p class=\"proxy-status-line\"><span class=\"codicon codicon-plug\"></span>${escapeHtml(proxyStatusLine)}</p>" else ""}
+        ${if (approvalMessage != null) "<div class=\"approval-banner\"><span class=\"codicon codicon-warning\"></span><span>${escapeHtml(approvalMessage)}</span></div>" else ""}
 
         <p class="actions-hint">"Clear Session Data Only" keeps your always_mask/never_mask overrides. "Clear All Local Data" removes those too, with nothing kept back.</p>
 

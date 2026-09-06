@@ -170,11 +170,78 @@ function renderOverrideList(kind: "always_mask" | "never_mask", label: string, o
     </fieldset>`;
 }
 
+export interface ProxyStatusInfo {
+  state: string; // "stopped" | "starting" | "running" | "stopping" | "error"
+  detail?: string;
+  port: number;
+}
+
+export interface ApprovalStatusInfo {
+  status: string; // "pending" | "not_configured" | "approved" | "check_failed"
+  message?: string;
+}
+
 export interface WebviewRenderOptions {
   cspSource: string;
   nonce: string;
   codiconsUri: string;
   requestCount: number;
+  proxyStatus: ProxyStatusInfo;
+  approvalStatus?: ApprovalStatusInfo;
+}
+
+const PROXY_STATE_ICON: Record<string, string> = {
+  stopped: "circle-large-outline",
+  starting: "loading",
+  running: "pass-filled",
+  stopping: "loading",
+  error: "error",
+};
+
+function renderProxySection(status: ProxyStatusInfo): string {
+  const icon = PROXY_STATE_ICON[status.state] ?? "circle-large-outline";
+  const spinClass = status.state === "starting" || status.state === "stopping" ? " spin" : "";
+  const label = status.state === "error" && status.detail ? `error: ${status.detail}` : status.state;
+  const canStart = status.state === "stopped" || status.state === "error";
+  const canStop = status.state === "running" || status.state === "starting";
+
+  return `
+    <fieldset class="override-section">
+      <legend>Chat proxy</legend>
+      <div class="proxy-row">
+        <span class="codicon codicon-${icon}${spinClass} proxy-state-icon proxy-state-${escapeHtml(status.state)}"></span>
+        <span class="proxy-state-label">${escapeHtml(label)}</span>
+        <span class="proxy-port">port ${status.port}</span>
+      </div>
+      <div class="proxy-actions">
+        <button id="start-proxy-btn" class="btn-secondary" ${canStart ? "" : "disabled"}>
+          <span class="codicon codicon-play"></span>Start
+        </button>
+        <button id="stop-proxy-btn" class="btn-secondary" ${canStop ? "" : "disabled"}>
+          <span class="codicon codicon-stop-circle"></span>Stop
+        </button>
+        <button id="restart-proxy-btn" class="btn-secondary">
+          <span class="codicon codicon-sync"></span>Restart
+        </button>
+        <button id="set-api-key-btn" class="btn-secondary">
+          <span class="codicon codicon-key"></span>Set API Key
+        </button>
+      </div>
+      <p class="field-hint">Starting/stopping here replaces running <code>decoy chat-proxy</code> in a terminal yourself -- no terminal needs to stay open.</p>
+    </fieldset>`;
+}
+
+function renderApprovalBanner(approval: ApprovalStatusInfo | undefined): string {
+  if (!approval || approval.status !== "pending") {
+    return "";
+  }
+  return `
+    <div class="approval-banner" id="approval-banner">
+      <span class="codicon codicon-warning"></span>
+      <div class="approval-text">
+        <strong>Action needed:</strong> ${escapeHtml(approval.message ?? "The Decoy MCP server is pending approval.")}
+      </div>
+    </div>`;
 }
 
 export function buildWebviewHtml(
@@ -450,6 +517,36 @@ export function buildWebviewHtml(
       color: var(--vscode-errorForeground, #f14c4c);
       margin: 0;
     }
+    .field-hint {
+      font-size: 11px;
+      color: var(--vscode-descriptionForeground);
+      margin: var(--gap-s) 0 0;
+    }
+
+    /* -------- chat proxy lifecycle controls -------- */
+    .proxy-row { display: flex; align-items: center; gap: 6px; margin-bottom: var(--gap-s); }
+    .proxy-state-icon { font-size: 14px; }
+    .proxy-state-running { color: var(--vscode-charts-green, #89d185); }
+    .proxy-state-error { color: var(--vscode-errorForeground, #f14c4c); }
+    .proxy-state-stopped, .proxy-state-stopping { color: var(--vscode-descriptionForeground); }
+    .proxy-state-label { font-size: 12px; font-weight: 600; text-transform: capitalize; }
+    .proxy-port { font-size: 11px; color: var(--vscode-descriptionForeground); margin-left: auto; font-family: var(--vscode-editor-font-family, monospace); }
+    .proxy-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+
+    /* -------- approval banner -------- */
+    .approval-banner {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      background: color-mix(in srgb, var(--vscode-charts-orange, #cca700) 16%, transparent);
+      border: 1px solid var(--vscode-charts-orange, #cca700);
+      border-radius: var(--radius);
+      padding: var(--gap-s) var(--gap-m);
+      margin-bottom: var(--gap-m);
+      font-size: 12px;
+    }
+    .approval-banner .codicon { color: var(--vscode-charts-orange, #cca700); font-size: 16px; margin-top: 1px; }
+    .approval-text { line-height: 1.4; }
 
     /* -------- pending / loading overlay -------- */
     .pending-banner {
@@ -506,6 +603,12 @@ export function buildWebviewHtml(
       removes those too, with nothing kept back.
     </p>
 
+    ${renderApprovalBanner(options.approvalStatus)}
+
+    <section>
+      ${renderProxySection(options.proxyStatus)}
+    </section>
+
     <section>
       <h2>Recent requests</h2>
       <div id="requests">${requestsHtml}</div>
@@ -550,6 +653,15 @@ export function buildWebviewHtml(
     document.getElementById("clear-all-btn").addEventListener("click", () => {
       post({ command: "clearAll" });
     });
+
+    const startProxyBtn = document.getElementById("start-proxy-btn");
+    if (startProxyBtn) startProxyBtn.addEventListener("click", () => post({ command: "startChatProxy" }));
+    const stopProxyBtn = document.getElementById("stop-proxy-btn");
+    if (stopProxyBtn) stopProxyBtn.addEventListener("click", () => post({ command: "stopChatProxy" }));
+    const restartProxyBtn = document.getElementById("restart-proxy-btn");
+    if (restartProxyBtn) restartProxyBtn.addEventListener("click", () => post({ command: "restartChatProxy" }));
+    const setApiKeyBtn = document.getElementById("set-api-key-btn");
+    if (setApiKeyBtn) setApiKeyBtn.addEventListener("click", () => post({ command: "setApiKey" }));
 
     document.querySelectorAll(".clear-session-btn").forEach((btn) => {
       btn.addEventListener("click", (ev) => {

@@ -277,6 +277,19 @@ through Decoy's own code.
    reassembled before being unmasked, rather than risking either half
    leaking through un-reversed).
 
+   **Who can actually use this, stated plainly rather than implied
+   universal:** the `ANTHROPIC_API_KEY` above is a separate, billed
+   credential from a Claude Pro/Max subscription login, not an
+   alternative name for the same thing — confirmed directly against a
+   real Claude Code install, whose subscription auth lives under a
+   completely separate `oauthAccount` identity (own billing type, seat
+   tier, organization) from anything `ANTHROPIC_API_KEY` touches. A
+   Claude Pro/Max subscriber with no separate API key cannot make this
+   proxy work by configuration alone; getting one from
+   console.anthropic.com and accepting its own separate, per-token
+   billing is a real prerequisite this project does not try to remove.
+   See README.md's "Who this is actually for" section.
+
    **This still requires the host application to actually be configured
    to send its traffic through this proxy** (`ANTHROPIC_BASE_URL`/
    `OPENAI_BASE_URL` set correctly) — a host that talks to the real

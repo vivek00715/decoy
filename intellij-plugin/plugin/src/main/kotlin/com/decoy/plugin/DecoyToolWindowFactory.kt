@@ -39,5 +39,10 @@ class DecoyToolWindowFactory : ToolWindowFactory {
         }
 
         service.controller.refresh()
+        // Checking approval shells out to the real `claude` CLI (not
+        // free) -- done once when the tool window actually opens,
+        // matching the VS Code panel's same "check on open" cadence
+        // (see extension.ts's resolveWebviewView), not on every refresh.
+        service.checkApprovalAsync()
     }
 }

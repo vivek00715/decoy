@@ -69,6 +69,23 @@
                     class="com.decoy.plugin.ConfigureMcpProxyAction"
                     text="Configure MCP Proxy (Claude Code)"
                     description="Write the bundled decoy-proxy binary into this project's .mcp.json so Claude Code can launch it as an MCP server"/>
+            <separator/>
+            <action id="Decoy.StartChatProxy"
+                    class="com.decoy.plugin.StartChatProxyAction"
+                    text="Start Chat Proxy"
+                    description="Start the bundled decoy-proxy chat-completions proxy as a managed background process and point Claude Code at it"/>
+            <action id="Decoy.StopChatProxy"
+                    class="com.decoy.plugin.StopChatProxyAction"
+                    text="Stop Chat Proxy"
+                    description="Stop the running chat proxy process and unset ANTHROPIC_BASE_URL in .claude/settings.json"/>
+            <action id="Decoy.RestartChatProxy"
+                    class="com.decoy.plugin.RestartChatProxyAction"
+                    text="Restart Chat Proxy"
+                    description="Stop and restart the chat proxy process"/>
+            <action id="Decoy.SetApiKey"
+                    class="com.decoy.plugin.SetApiKeyAction"
+                    text="Set Anthropic API Key"
+                    description="Store your Anthropic API key securely in the OS credential store (PasswordSafe) -- a separate, billed key, not your Claude Pro/Max subscription login"/>
         </group>
     </actions>
 </idea-plugin>

@@ -1,21 +1,38 @@
 package com.decoy.plugin
 
 import com.decoy.core.CLEAR_SESSION_LINK_PREFIX
+import com.decoy.core.ChatProxyProcessManager
+import com.decoy.core.DEFAULT_MCP_SERVER_NAME
 import com.decoy.core.EDIT_OVERRIDE_LINK_PREFIX
+import com.decoy.core.McpApprovalResult
+import com.decoy.core.McpApprovalStatus
 import com.decoy.core.OverrideKind
 import com.decoy.core.OverrideListKind
 import com.decoy.core.OverridesFile
 import com.decoy.core.PanelController
 import com.decoy.core.PanelHost
+import com.decoy.core.ProxyState
 import com.decoy.core.REMOVE_OVERRIDE_LINK_PREFIX
 import com.decoy.core.RequestGroup
+import com.decoy.core.SecretsHost
 import com.decoy.core.WebviewTheme
+import com.decoy.core.approvalActionMessage
+import com.decoy.core.checkMcpApproval
 import com.decoy.core.editOverrideEntry
+import com.decoy.core.ensureApiKey
 import com.decoy.core.parseWebviewMessage
 import com.decoy.core.readOverrides
+import com.decoy.core.removeAnthropicBaseUrl
 import com.decoy.core.removeOverrideEntry
 import com.decoy.core.renderHtml
 import com.decoy.core.renderWebviewHtml
+import com.decoy.core.runSetApiKey
+import com.decoy.core.writeAnthropicBaseUrl
+import com.intellij.credentialStore.CredentialAttributes
+import com.intellij.credentialStore.Credentials
+import com.intellij.credentialStore.generateServiceName
+import com.intellij.ide.passwordSafe.PasswordSafe
+import com.intellij.openapi.Disposable
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.project.Project
@@ -29,6 +46,8 @@ import java.io.File
 import javax.swing.JComponent
 import javax.swing.JEditorPane
 import javax.swing.UIManager
+
+private const val CHAT_PROXY_PORT = 8787
 
 /**
  * Project-level service holding the one PanelController + rendered view
@@ -76,7 +95,7 @@ import javax.swing.UIManager
  * limitation, not just a cosmetic pass.
  */
 @Service(Service.Level.PROJECT)
-class DecoyProjectService(private val project: Project) {
+class DecoyProjectService(private val project: Project) : Disposable {
 
     /** Exposed so the override-editing actions (Actions.kt) can read the
      * current overrides before writing an updated copy via
@@ -87,6 +106,126 @@ class DecoyProjectService(private val project: Project) {
         get() = File(project.basePath ?: ".")
 
     private val useJcef: Boolean = JBCefApp.isSupported()
+
+    // -------- Chat proxy lifecycle (functional-parity pass with VS
+    // Code's ChatProxyManager/apiKeyCommand/claudeSettingsConfig/
+    // mcpApproval -- see ApiKeyStore.kt/ChatProxyProcessManager.kt/
+    // ClaudeSettingsWriter.kt/McpApproval.kt in `core` for the tested
+    // logic this wires up. Toolbar AnActions (Actions.kt), not
+    // in-webview buttons, per this pass's explicit scope -- in-webview
+    // buttons matching VS Code's exact panel are a separate fast-follow. --
+
+    /** Lazy: a project service is constructed on first
+     * `project.service<...>()` access, which can happen before the user
+     * ever intends to touch the chat proxy at all -- building the
+     * manager (and resolving the bundled binary path) only when first
+     * actually needed avoids doing that work for a project that never
+     * uses this feature. */
+    private val chatProxyManager: ChatProxyProcessManager by lazy {
+        val binary = findBundledDecoyProxyBinary()
+        val command = binary?.absolutePath ?: "decoy"
+        ChatProxyProcessManager(command, listOf("chat-proxy", "--port", CHAT_PROXY_PORT.toString()))
+    }
+
+    @Volatile private var lastApproval: McpApprovalResult? = null
+
+    /** PasswordSafe-backed SecretsHost -- see ApiKeyStore.kt's module
+     * docstring for why PasswordSafe itself can only be exercised behind
+     * this interface, never inside a plain-JUnit-testable `core` file.
+     * `CredentialAttributes`/`Credentials`/`generateServiceName`/
+     * `PasswordSafe` are real IntelliJ Platform SDK types -- this whole
+     * function is therefore compile-verified only (see MANUAL_TEST.md),
+     * the same disclosed-gap treatment as JBCefBrowser/JBCefJSQuery got
+     * in Phase 13 before a real IDE run could confirm them interactively. */
+    private fun secretsHost(): SecretsHost {
+        val attributes = CredentialAttributes(generateServiceName("Decoy", "anthropicApiKey"))
+        return object : SecretsHost {
+            override fun getSecret(key: String): String? = PasswordSafe.instance.getPassword(attributes)
+            override fun storeSecret(key: String, value: String) {
+                PasswordSafe.instance.set(attributes, Credentials(key, value))
+            }
+            override fun deleteSecret(key: String) {
+                PasswordSafe.instance.set(attributes, null)
+            }
+            override fun promptForApiKey(promptText: String): String? =
+                Messages.showPasswordDialog(project, promptText, "Decoy: Anthropic API Key", Messages.getQuestionIcon())
+            override fun showInfo(message: String) {
+                Messages.showInfoMessage(project, message, "Decoy")
+            }
+            override fun showError(message: String) {
+                Messages.showErrorDialog(project, message, "Decoy")
+            }
+        }
+    }
+
+    /** "Start Chat Proxy" toolbar action's real work: prompts for (or
+     * reuses) the API key, starts the process, and -- matching the VS
+     * Code side's behavior exactly, confirmed directly against a real
+     * `claude` CLI in that phase -- writes ANTHROPIC_BASE_URL into
+     * `.claude/settings.json` automatically as part of the SAME action,
+     * not a separate manual step. */
+    fun startChatProxy() {
+        val key = ensureApiKey(secretsHost()) ?: return // user cancelled the key prompt
+        chatProxyManager.start(mapOf("ANTHROPIC_API_KEY" to key))
+        writeAnthropicBaseUrl(rootDir, "http://127.0.0.1:$CHAT_PROXY_PORT")
+        refreshProxyBanner()
+    }
+
+    fun stopChatProxy() {
+        chatProxyManager.stopAndWait()
+        removeAnthropicBaseUrl(rootDir)
+        refreshProxyBanner()
+    }
+
+    fun restartChatProxy() {
+        val key = ensureApiKey(secretsHost()) ?: return
+        chatProxyManager.restart(mapOf("ANTHROPIC_API_KEY" to key))
+        writeAnthropicBaseUrl(rootDir, "http://127.0.0.1:$CHAT_PROXY_PORT")
+        refreshProxyBanner()
+    }
+
+    fun setApiKey() {
+        runSetApiKey(secretsHost())
+    }
+
+    /** Shells out to `claude mcp get decoy` -- not free, so run off the
+     * EDT via `executeOnPooledThread`, matching how VS Code's Promise-
+     * based `checkMcpApproval` naturally avoided blocking the UI thread;
+     * Kotlin/Swing has no equivalent for free, so this is handled
+     * explicitly. Re-renders the panel once the real result lands. */
+    fun checkApprovalAsync() {
+        ApplicationManager.getApplication().executeOnPooledThread {
+            val result = checkMcpApproval(DEFAULT_MCP_SERVER_NAME, rootDir)
+            lastApproval = result
+            ApplicationManager.getApplication().invokeLater { refreshProxyBanner() }
+        }
+    }
+
+    private fun proxyStatusLine(): String {
+        val state = when (chatProxyManager.state) {
+            ProxyState.STOPPED -> "stopped"
+            ProxyState.STARTING -> "starting"
+            ProxyState.RUNNING -> "running"
+            ProxyState.STOPPING -> "stopping"
+            ProxyState.ERROR -> "error: ${chatProxyManager.lastError}"
+        }
+        return "Chat proxy: $state (port $CHAT_PROXY_PORT)"
+    }
+
+    private fun approvalMessage(): String? {
+        val approval = lastApproval ?: return null
+        if (approval.status != McpApprovalStatus.PENDING) return null
+        return approvalActionMessage(DEFAULT_MCP_SERVER_NAME)
+    }
+
+    /** Triggers a normal full refresh (re-reads the audit log/overrides
+     * AND re-renders with the current proxy/approval banner strings) --
+     * simplest correct option after a Start/Stop/Restart click or an
+     * approval check landing; the audit log re-read is cheap relative to
+     * the process control action that just happened. */
+    private fun refreshProxyBanner() {
+        controller.refresh()
+    }
 
     // -------- JCEF path --------
     private var jcefBrowser: JBCefBrowser? = null
@@ -125,7 +264,11 @@ class DecoyProjectService(private val project: Project) {
             ApplicationManager.getApplication().invokeLater {
                 if (useJcef) {
                     ensureJcefBrowser()
-                    val html = renderWebviewHtml(groups, overrides, computeWebviewTheme())
+                    val html = renderWebviewHtml(
+                        groups, overrides, computeWebviewTheme(),
+                        proxyStatusLine = proxyStatusLine(),
+                        approvalMessage = approvalMessage(),
+                    )
                     jcefBrowser?.loadHTML(withBridgeInjected(html), webviewBaseUrl())
                 } else {
                     editorPane.text = renderHtml(groups, overrides)
@@ -250,6 +393,28 @@ class DecoyProjectService(private val project: Project) {
         val kind = runCatching { OverrideKind.valueOf(parts[0]) }.getOrNull() ?: return null
         val list = runCatching { OverrideListKind.valueOf(parts[1]) }.getOrNull() ?: return null
         return Triple(kind, list, parts[2])
+    }
+
+    /** Called automatically by the IntelliJ Platform on project close --
+     * `@Service`-annotated classes implementing `Disposable` are
+     * registered for this without any extra `Disposer.register()` call
+     * (the platform does it when the service is first instantiated).
+     * MUST actually stop the chat proxy here, not just note that it
+     * should: this is the exact "fire-and-forget kill can outlive the
+     * host" lesson already learned the hard way on the VS Code side
+     * (extension.ts's deactivate() has to await ChatProxyManager.dispose()
+     * for the same reason) -- `stopAndWait()` (not `stop()`) blocks this
+     * call until the process has actually exited (SIGTERM, escalating to
+     * SIGKILL on a timeout), so this method does not return while a
+     * child process is still alive, and no orphan survives the project
+     * closing. Safe to call even if "Start" was never clicked this
+     * session: `ChatProxyProcessManager`'s constructor does no I/O (just
+     * resolves the bundled binary path via `findBundledDecoyProxyBinary`),
+     * and `stopAndWait()` on a manager whose process is null returns
+     * immediately -- accessing the `by lazy` property here does not spawn
+     * anything. */
+    override fun dispose() {
+        chatProxyManager.stopAndWait()
     }
 }
 

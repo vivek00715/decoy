@@ -115,4 +115,25 @@ class WebviewContentTest {
         assertTrue(html.contains("clearAll"))
         assertTrue(html.contains("saveOverrides"))
     }
+
+    @Test
+    fun `renders the proxy status line and approval banner when provided, and omits them when not`() {
+        val withBoth = renderWebviewHtml(
+            emptyList(), emptyOverridesFile(), WebviewTheme.fallback(),
+            proxyStatusLine = "Chat proxy: running (port 8787)",
+            approvalMessage = "The Decoy MCP server is registered but not connected yet.",
+        )
+        assertTrue(withBoth.contains("Chat proxy: running (port 8787)"))
+        assertTrue(withBoth.contains("approval-banner"))
+        // the real approvalActionMessage() text contains an apostrophe
+        // ("Decoy's"), which escapeHtml() correctly turns into &#39; --
+        // this test message avoids one so the assertion checks the
+        // banner mechanism itself, not escaping (already covered
+        // elsewhere by the HTML-escaping test above).
+        assertTrue(withBoth.contains("The Decoy MCP server is registered but not connected yet."))
+
+        val withNeither = renderWebviewHtml(emptyList(), emptyOverridesFile(), WebviewTheme.fallback())
+        assertFalse(withNeither.contains("proxy-status-line\">"))
+        assertFalse(withNeither.contains("class=\"approval-banner\""))
+    }
 }
