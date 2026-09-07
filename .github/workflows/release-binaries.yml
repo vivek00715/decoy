@@ -1,10 +1,16 @@
 # UNVERIFIED -- written and reviewed but never run against a real
-# GitHub Actions execution (same caveat as ci.yml: no push has ever
-# triggered this workflow as of authoring it). Before relying on this
-# for a real release, push a `v*` tag to a real GitHub repo and confirm
-# all three build jobs go green AND the release job actually attaches
-# three binaries to the GitHub Release -- treat that first real run as
-# a verification step in its own right, not a formality.
+# GitHub Actions execution: this workflow triggers on `v*` tag pushes
+# only, and no tag has ever been pushed to this repo (confirmed alongside
+# ci.yml's trigger-scoping bug -- see that file's comment for the full
+# diagnosis of why CI had never run at all). Unlike ci.yml, this
+# workflow's trigger itself is not the bug (tag-based triggers are
+# branch-independent), so no scoping change was needed here -- it is
+# simply still unexercised because no `v*` tag has been pushed yet.
+# Before relying on this for a real release, push a `v*` tag to this
+# real GitHub repo and confirm all three build jobs go green AND the
+# release job actually attaches three binaries to the GitHub Release --
+# treat that first real run as a verification step in its own right, not
+# a formality.
 #
 # Builds the standalone `decoy-proxy` binary (see scripts/build_binary.py
 # and Phase 12 of the project) on all three target OSes and attaches

@@ -1,16 +1,25 @@
-# CI for Decoy. Written and reviewed but NOT verified against a real
-# GitHub Actions run -- this repository has no remote and no commits yet
-# as of this writing, so there has been no push to actually trigger it.
-# Before relying on this, push to a real GitHub repo and confirm all
-# three jobs go green; treat a first real run as a verification step in
-# its own right, not a formality.
+# CI for Decoy.
+#
+# CONFIRMED BUG, now fixed: this originally triggered on `branches: [main]`
+# for both push and pull_request. This repo's actual default branch is
+# `master` (confirmed via `gh repo view --json defaultBranchRef`), and
+# every real commit lives on `feature/phase1` -- neither is named `main`,
+# so this trigger never matched a single push in this repo's history.
+# Confirmed directly: `gh api repos/<owner>/<repo>/actions/workflows`
+# reported `total_count: 0` -- GitHub had never even registered this file
+# as a workflow, because the only branch that has it (`feature/phase1`)
+# never produced a push event this trigger would fire on. Fixed by
+# triggering push on any branch (so work on a feature branch is verified
+# the same way work on `master` would be, matching how this project is
+# actually being developed) and pull_request against the real default
+# branch, `master`, not the assumed-but-nonexistent `main`.
 name: CI
 
 on:
   push:
-    branches: [main]
+    branches: ["**"]
   pull_request:
-    branches: [main]
+    branches: [master]
 
 jobs:
   python:
