@@ -21,6 +21,18 @@ export interface SecretsHost {
   deleteSecret(key: string): Promise<void>;
   /** Returns the entered value, or undefined if the user cancelled. */
   promptForApiKey(promptText: string): Promise<string | undefined>;
+  /** Fixed-choice prompt (e.g. VS Code's showQuickPick) -- undefined if
+   * the user cancelled/escaped. Used by credentialConfig.ts's mode
+   * choice, kept here (not there) since it's a SecretsHost capability
+   * like the other prompt methods below. */
+  promptForChoice(promptText: string, choices: string[]): Promise<string | undefined>;
+  /** Free-text prompt (gateway token/URL) -- undefined if cancelled.
+   * `password: true` masks input the same way promptForApiKey does. */
+  promptForText(promptText: string, options?: { password?: boolean }): Promise<string | undefined>;
+  /** Explicit yes/no confirmation for a risky toggle (TLS verification
+   * skip) -- returns false on cancel or an explicit "No", never assumes
+   * consent from a dismissed dialog. */
+  confirmDangerousToggle(message: string): Promise<boolean>;
   showInfo(message: string): void;
   showError(message: string): void;
 }

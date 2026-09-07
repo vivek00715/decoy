@@ -16,17 +16,23 @@ import com.decoy.core.REMOVE_OVERRIDE_LINK_PREFIX
 import com.decoy.core.RequestGroup
 import com.decoy.core.SecretsHost
 import com.decoy.core.WebviewTheme
+import com.decoy.core.GatewayCheckCredentials
+import com.decoy.core.GatewayCheckResult
+import com.decoy.core.ResolvedCredentials
 import com.decoy.core.approvalActionMessage
+import com.decoy.core.buildProxyEnv
+import com.decoy.core.checkGatewayConnectivity
 import com.decoy.core.checkMcpApproval
 import com.decoy.core.editOverrideEntry
-import com.decoy.core.ensureApiKey
+import com.decoy.core.ensureCredentials
+import com.decoy.core.httpClientGatewayRequest
 import com.decoy.core.parseWebviewMessage
 import com.decoy.core.readOverrides
 import com.decoy.core.removeAnthropicBaseUrl
 import com.decoy.core.removeOverrideEntry
 import com.decoy.core.renderHtml
 import com.decoy.core.renderWebviewHtml
-import com.decoy.core.runSetApiKey
+import com.decoy.core.runSetCredentials
 import com.decoy.core.writeAnthropicBaseUrl
 import com.intellij.credentialStore.CredentialAttributes
 import com.intellij.credentialStore.Credentials
@@ -129,6 +135,13 @@ class DecoyProjectService(private val project: Project) : Disposable {
 
     @Volatile private var lastApproval: McpApprovalResult? = null
 
+    /** Set when a gateway-mode connectivity check fails BEFORE the local
+     * proxy process is even spawned (unreachable URL, rejected token) --
+     * ChatProxyProcessManager's process-level state alone can't represent
+     * this, since the local proxy is never started in that case. Cleared
+     * on the next successful start/restart. See GatewayConnectivity.kt. */
+    @Volatile private var lastGatewayError: String? = null
+
     /** PasswordSafe-backed SecretsHost -- see ApiKeyStore.kt's module
      * docstring for why PasswordSafe itself can only be exercised behind
      * this interface, never inside a plain-JUnit-testable `core` file.
@@ -136,19 +149,49 @@ class DecoyProjectService(private val project: Project) : Disposable {
      * `PasswordSafe` are real IntelliJ Platform SDK types -- this whole
      * function is therefore compile-verified only (see MANUAL_TEST.md),
      * the same disclosed-gap treatment as JBCefBrowser/JBCefJSQuery got
-     * in Phase 13 before a real IDE run could confirm them interactively. */
+     * in Phase 13 before a real IDE run could confirm them interactively.
+     *
+     * BUG FIXED HERE (pre-existing, found while wiring the 5 new secret
+     * keys the gateway-credentials flow needs): the previous version
+     * built ONE fixed CredentialAttributes up front and ignored the
+     * `key` parameter on every SecretsHost method entirely -- harmless
+     * while SECRET_KEY_ANTHROPIC_API_KEY was the only key ever used, but
+     * would have silently collapsed all 5 of CredentialConfig.kt's
+     * distinct keys (API key, gateway token, gateway URL, TLS-skip flag,
+     * mode flag) onto the SAME PasswordSafe entry, each overwriting the
+     * last. Fixed by deriving a separate CredentialAttributes per key. */
+    private fun credentialAttributesFor(key: String) = CredentialAttributes(generateServiceName("Decoy", key))
+
     private fun secretsHost(): SecretsHost {
-        val attributes = CredentialAttributes(generateServiceName("Decoy", "anthropicApiKey"))
         return object : SecretsHost {
-            override fun getSecret(key: String): String? = PasswordSafe.instance.getPassword(attributes)
+            override fun getSecret(key: String): String? =
+                PasswordSafe.instance.getPassword(credentialAttributesFor(key))
             override fun storeSecret(key: String, value: String) {
-                PasswordSafe.instance.set(attributes, Credentials(key, value))
+                PasswordSafe.instance.set(credentialAttributesFor(key), Credentials(key, value))
             }
             override fun deleteSecret(key: String) {
-                PasswordSafe.instance.set(attributes, null)
+                PasswordSafe.instance.set(credentialAttributesFor(key), null)
             }
             override fun promptForApiKey(promptText: String): String? =
                 Messages.showPasswordDialog(project, promptText, "Decoy: Anthropic API Key", Messages.getQuestionIcon())
+            override fun promptForChoice(promptText: String, choices: List<String>): String? {
+                val idx = Messages.showChooseDialog(
+                    project, promptText, "Decoy", Messages.getQuestionIcon(), choices.toTypedArray(), choices.firstOrNull(),
+                )
+                return choices.getOrNull(idx)
+            }
+            override fun promptForText(promptText: String, password: Boolean): String? =
+                if (password) {
+                    Messages.showPasswordDialog(project, promptText, "Decoy", Messages.getQuestionIcon())
+                } else {
+                    Messages.showInputDialog(project, promptText, "Decoy", Messages.getQuestionIcon())
+                }
+            override fun confirmDangerousToggle(message: String): Boolean {
+                val result = Messages.showYesNoDialog(
+                    project, message, "Decoy: TLS Verification", "Skip Verification", "Keep Verification On", Messages.getWarningIcon(),
+                )
+                return result == Messages.YES
+            }
             override fun showInfo(message: String) {
                 Messages.showInfoMessage(project, message, "Decoy")
             }
@@ -158,17 +201,16 @@ class DecoyProjectService(private val project: Project) : Disposable {
         }
     }
 
-    /** "Start Chat Proxy" toolbar action's real work: prompts for (or
-     * reuses) the API key, starts the process, and -- matching the VS
-     * Code side's behavior exactly, confirmed directly against a real
-     * `claude` CLI in that phase -- writes ANTHROPIC_BASE_URL into
-     * `.claude/settings.json` automatically as part of the SAME action,
-     * not a separate manual step. */
+    /** "Start Chat Proxy" toolbar action's real work: resolves (or
+     * prompts for) credentials -- Direct API key or Org Gateway auth
+     * token -- starts the process with the right env vars for whichever
+     * mode is active, and -- matching the VS Code side's behavior
+     * exactly, confirmed directly against a real `claude` CLI in that
+     * phase -- writes ANTHROPIC_BASE_URL into `.claude/settings.json`
+     * automatically as part of the SAME action, not a separate manual
+     * step. */
     fun startChatProxy() {
-        val key = ensureApiKey(secretsHost()) ?: return // user cancelled the key prompt
-        chatProxyManager.start(mapOf("ANTHROPIC_API_KEY" to key))
-        writeAnthropicBaseUrl(rootDir, "http://127.0.0.1:$CHAT_PROXY_PORT")
-        refreshProxyBanner()
+        resolveCredentialsThenRun { env -> launchChatProxy(env) }
     }
 
     fun stopChatProxy() {
@@ -178,14 +220,62 @@ class DecoyProjectService(private val project: Project) : Disposable {
     }
 
     fun restartChatProxy() {
-        val key = ensureApiKey(secretsHost()) ?: return
-        chatProxyManager.restart(mapOf("ANTHROPIC_API_KEY" to key))
+        resolveCredentialsThenRun { env ->
+            chatProxyManager.restart(env)
+            writeAnthropicBaseUrl(rootDir, "http://127.0.0.1:$CHAT_PROXY_PORT")
+            refreshProxyBanner()
+        }
+    }
+
+    fun setApiKey() {
+        runSetCredentials(secretsHost())
+    }
+
+    private fun launchChatProxy(env: Map<String, String>) {
+        chatProxyManager.start(env)
         writeAnthropicBaseUrl(rootDir, "http://127.0.0.1:$CHAT_PROXY_PORT")
         refreshProxyBanner()
     }
 
-    fun setApiKey() {
-        runSetApiKey(secretsHost())
+    /**
+     * Resolves credentials (prompting via modal dialogs on the EDT if
+     * needed -- Messages.* dialogs must run on the EDT, so this part is
+     * synchronous, same as the rest of this class's action handlers),
+     * then -- for Org Gateway mode only -- verifies the gateway is
+     * actually reachable and the token is accepted BEFORE running
+     * `action`, off the EDT via `executeOnPooledThread` (a real network
+     * call with a 10s timeout has no business blocking the UI thread,
+     * the same real Kotlin-specific concern already handled this way for
+     * `checkApprovalAsync` above). Direct mode skips the network hop
+     * entirely and runs `action` immediately. On a gateway-check failure,
+     * `action` is never called -- the failure is surfaced via
+     * lastGatewayError/proxyStatusLine() and an error dialog instead. */
+    private fun resolveCredentialsThenRun(action: (env: Map<String, String>) -> Unit) {
+        val creds = ensureCredentials(secretsHost()) ?: return // user cancelled a credential prompt
+        val env = buildProxyEnv(creds, emptyMap())
+
+        if (creds !is ResolvedCredentials.Gateway) {
+            lastGatewayError = null
+            action(env)
+            return
+        }
+
+        ApplicationManager.getApplication().executeOnPooledThread {
+            val result = checkGatewayConnectivity(
+                GatewayCheckCredentials(creds.authToken, creds.baseUrl, creds.skipTlsVerify),
+                ::httpClientGatewayRequest,
+            )
+            ApplicationManager.getApplication().invokeLater {
+                if (result is GatewayCheckResult.Failed) {
+                    lastGatewayError = result.message
+                    secretsHost().showError(result.message)
+                    refreshProxyBanner()
+                } else {
+                    lastGatewayError = null
+                    action(env)
+                }
+            }
+        }
     }
 
     /** Shells out to `claude mcp get decoy` -- not free, so run off the
@@ -202,6 +292,13 @@ class DecoyProjectService(private val project: Project) : Disposable {
     }
 
     private fun proxyStatusLine(): String {
+        // A gateway check failure means the LOCAL process was never even
+        // spawned -- chatProxyManager.state is still legitimately
+        // STOPPED, but that would misleadingly read as "nothing wrong"
+        // without this override. See lastGatewayError's doc comment.
+        if (chatProxyManager.state == ProxyState.STOPPED && lastGatewayError != null) {
+            return "Chat proxy: error: $lastGatewayError (port $CHAT_PROXY_PORT)"
+        }
         val state = when (chatProxyManager.state) {
             ProxyState.STOPPED -> "stopped"
             ProxyState.STARTING -> "starting"

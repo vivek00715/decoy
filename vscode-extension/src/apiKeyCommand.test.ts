@@ -28,6 +28,18 @@ function makeFakeHost(initial: Record<string, string> = {}, promptValue: string 
       promptCalls.push(promptText);
       return promptValue;
     },
+    async promptForChoice(promptText) {
+      promptCalls.push(promptText);
+      return undefined;
+    },
+    async promptForText(promptText) {
+      promptCalls.push(promptText);
+      return promptValue;
+    },
+    async confirmDangerousToggle(message) {
+      promptCalls.push(message);
+      return false;
+    },
     showInfo(message) {
       infoMessages.push(message);
     },

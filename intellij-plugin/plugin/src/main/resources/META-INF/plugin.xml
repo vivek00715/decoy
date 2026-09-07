@@ -84,8 +84,8 @@
                     description="Stop and restart the chat proxy process"/>
             <action id="Decoy.SetApiKey"
                     class="com.decoy.plugin.SetApiKeyAction"
-                    text="Set Anthropic API Key"
-                    description="Store your Anthropic API key securely in the OS credential store (PasswordSafe) -- a separate, billed key, not your Claude Pro/Max subscription login"/>
+                    text="Set Credentials (API Key or Org Gateway)"
+                    description="Choose Direct (Anthropic API key) or Org Gateway (bearer auth token + gateway URL) and store it securely in the OS credential store (PasswordSafe)"/>
         </group>
     </actions>
 </idea-plugin>

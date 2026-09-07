@@ -12,7 +12,12 @@ import org.junit.jupiter.api.Test
  * test), so this fake stands in for "some credential store," exactly
  * the role vscode-extension/src/apiKeyCommand.test.ts's fake host plays
  * on the other side. */
-class FakeSecretsHost(initial: MutableMap<String, String> = mutableMapOf(), private val promptValue: String?) : SecretsHost {
+class FakeSecretsHost(
+    initial: MutableMap<String, String> = mutableMapOf(),
+    private val promptValue: String?,
+    private val choiceValue: String? = null,
+    private val confirmValue: Boolean = false,
+) : SecretsHost {
     val store: MutableMap<String, String> = initial
     val infoMessages = mutableListOf<String>()
     val errorMessages = mutableListOf<String>()
@@ -24,6 +29,18 @@ class FakeSecretsHost(initial: MutableMap<String, String> = mutableMapOf(), priv
     override fun promptForApiKey(promptText: String): String? {
         promptCalls.add(promptText)
         return promptValue
+    }
+    override fun promptForChoice(promptText: String, choices: List<String>): String? {
+        promptCalls.add(promptText)
+        return choiceValue
+    }
+    override fun promptForText(promptText: String, password: Boolean): String? {
+        promptCalls.add(promptText)
+        return promptValue
+    }
+    override fun confirmDangerousToggle(message: String): Boolean {
+        promptCalls.add(message)
+        return confirmValue
     }
     override fun showInfo(message: String) { infoMessages.add(message) }
     override fun showError(message: String) { errorMessages.add(message) }

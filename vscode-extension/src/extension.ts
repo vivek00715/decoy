@@ -3,7 +3,7 @@ import * as fs from "fs";
 import * as path from "path";
 import * as vscode from "vscode";
 
-import { ensureApiKey, runSetApiKey, SecretsHost } from "./apiKeyCommand";
+import { SecretsHost } from "./apiKeyCommand";
 import { groupByRequest, readAuditLog } from "./auditLog";
 import { ChatProxyManager, ProxyState } from "./chatProxyManager";
 import {
@@ -12,6 +12,8 @@ import {
   removeClaudeSettingsEnvKey,
   serializeClaudeSettings,
 } from "./claudeSettingsConfig";
+import { buildProxyEnv, ensureCredentials, ResolvedCredentials, runSetCredentials } from "./credentialConfig";
+import { checkGatewayConnectivity, nodeGatewayRequest } from "./gatewayConnectivity";
 import { findBundledBinary, runConfigureMcpProxy } from "./mcpConfigCommand";
 import { approvalActionMessage, checkMcpApproval, McpApprovalResult } from "./mcpApproval";
 import { PanelController, PanelHost, WebviewMessage } from "./panelController";
@@ -53,6 +55,12 @@ class ChatProxyController {
   private manager: ChatProxyManager | undefined;
   private lastApproval: McpApprovalResult | undefined;
   private readonly port = DEFAULT_CHAT_PROXY_PORT;
+  // Set when a gateway-mode connectivity check fails BEFORE the local
+  // proxy process is even spawned (unreachable URL, rejected token) --
+  // the process-level ChatProxyManager state alone can't represent this,
+  // since the local proxy is never started in that case. Cleared on the
+  // next successful start/restart.
+  private lastGatewayError: string | undefined;
 
   constructor(
     private readonly context: vscode.ExtensionContext,
@@ -66,12 +74,23 @@ class ChatProxyController {
       deleteSecret: (key) => Promise.resolve(this.context.secrets.delete(key)),
       promptForApiKey: async (promptText) =>
         vscode.window.showInputBox({ prompt: promptText, password: true, ignoreFocusOut: true }),
+      promptForChoice: async (promptText, choices) =>
+        vscode.window.showQuickPick(choices, { placeHolder: promptText, ignoreFocusOut: true }),
+      promptForText: async (promptText, options) =>
+        vscode.window.showInputBox({ prompt: promptText, password: options?.password ?? false, ignoreFocusOut: true }),
+      confirmDangerousToggle: async (message) => {
+        const choice = await vscode.window.showWarningMessage(message, { modal: true }, "Skip Verification", "Keep Verification On");
+        return choice === "Skip Verification";
+      },
       showInfo: (message) => void vscode.window.showInformationMessage(message),
       showError: (message) => void vscode.window.showErrorMessage(message),
     };
   }
 
   getProxyStatus(): { state: ProxyState; detail?: string; port: number } {
+    if (!this.manager && this.lastGatewayError) {
+      return { state: "error", detail: this.lastGatewayError, port: this.port };
+    }
     return {
       state: this.manager?.getState() ?? "stopped",
       detail: this.manager?.getLastError(),
@@ -118,12 +137,35 @@ class ChatProxyController {
     return this.manager;
   }
 
-  async start(): Promise<void> {
-    const key = await ensureApiKey(this.secretsHost());
-    if (!key) {
-      return; // user cancelled the first-run key prompt
+  /** Resolves stored credentials and, for gateway mode, verifies the
+   * gateway is actually reachable and the token is accepted BEFORE
+   * anything is spawned -- see this class's lastGatewayError field.
+   * Returns undefined (having already surfaced the reason to the user)
+   * if credentials are missing/cancelled or the gateway check fails. */
+  private async resolveEnv(): Promise<NodeJS.ProcessEnv | undefined> {
+    const creds = await ensureCredentials(this.secretsHost());
+    if (!creds) {
+      return undefined; // user cancelled the credential prompt
     }
-    this.ensureManager().start({ ...process.env, ANTHROPIC_API_KEY: key } as NodeJS.ProcessEnv);
+    if (creds.mode === "gateway") {
+      const check = await checkGatewayConnectivity(creds, nodeGatewayRequest);
+      if (!check.ok) {
+        this.lastGatewayError = check.message;
+        this.secretsHost().showError(check.message);
+        this.onStateChange();
+        return undefined;
+      }
+    }
+    this.lastGatewayError = undefined;
+    return buildProxyEnv(creds as ResolvedCredentials, process.env);
+  }
+
+  async start(): Promise<void> {
+    const env = await this.resolveEnv();
+    if (!env) {
+      return;
+    }
+    this.ensureManager().start(env);
     this.writeBaseUrlIntoClaudeSettings();
   }
 
@@ -133,16 +175,16 @@ class ChatProxyController {
   }
 
   async restart(): Promise<void> {
-    const key = await ensureApiKey(this.secretsHost());
-    if (!key) {
+    const env = await this.resolveEnv();
+    if (!env) {
       return;
     }
-    await this.ensureManager().restart({ ...process.env, ANTHROPIC_API_KEY: key } as NodeJS.ProcessEnv);
+    await this.ensureManager().restart(env);
     this.writeBaseUrlIntoClaudeSettings();
   }
 
   async setApiKey(): Promise<void> {
-    await runSetApiKey(this.secretsHost());
+    await runSetCredentials(this.secretsHost());
   }
 
   /**

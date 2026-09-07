@@ -42,6 +42,16 @@ interface SecretsHost {
     fun deleteSecret(key: String)
     /** Returns the entered value, or null if the user cancelled. */
     fun promptForApiKey(promptText: String): String?
+    /** Fixed-choice prompt (e.g. Messages.showChooseDialog) -- null if
+     * the user cancelled/escaped. Used by CredentialConfig.kt's mode
+     * choice; mirrors vscode-extension's SecretsHost.promptForChoice. */
+    fun promptForChoice(promptText: String, choices: List<String>): String?
+    /** Free-text prompt (gateway token/URL) -- null if cancelled.
+     * `password = true` masks input the same way promptForApiKey does. */
+    fun promptForText(promptText: String, password: Boolean = false): String?
+    /** Explicit yes/no confirmation for a risky toggle (TLS verification
+     * skip) -- returns false on cancel or an explicit "No". */
+    fun confirmDangerousToggle(message: String): Boolean
     fun showInfo(message: String)
     fun showError(message: String)
 }

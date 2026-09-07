@@ -223,8 +223,8 @@ function renderProxySection(status: ProxyStatusInfo): string {
         <button id="restart-proxy-btn" class="btn-secondary">
           <span class="codicon codicon-sync"></span>Restart
         </button>
-        <button id="set-api-key-btn" class="btn-secondary">
-          <span class="codicon codicon-key"></span>Set API Key
+        <button id="set-api-key-btn" class="btn-secondary" title="Choose Direct (API Key) or Org Gateway (Auth Token)">
+          <span class="codicon codicon-key"></span>Set Credentials
         </button>
       </div>
       <p class="field-hint">Starting/stopping here replaces running <code>decoy chat-proxy</code> in a terminal yourself -- no terminal needs to stay open.</p>

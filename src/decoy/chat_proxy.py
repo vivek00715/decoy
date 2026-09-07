@@ -350,12 +350,36 @@ class StreamUnmaskBuffer:
 # --------------------------------------------------------------------------
 
 
+def _env_flag(name: str) -> bool:
+    """Opt-in boolean env var parsing (DECOY_UPSTREAM_SKIP_TLS_VERIFY and
+    similar) -- only an explicit truthy value turns the flag on; unset,
+    empty, or anything else is False. Never defaults to on."""
+    return os.environ.get(name, "").strip().lower() in ("1", "true", "yes", "on")
+
+
 @dataclass
 class ChatProxyConfig:
     anthropic_api_key: Optional[str] = None
+    # Bearer-token auth for the Anthropic-shaped upstream, as an
+    # alternative to anthropic_api_key -- for routing through an internal
+    # AI gateway (e.g. a corporate proxy in front of Claude) that
+    # authenticates via `Authorization: Bearer <token>` rather than
+    # accepting `x-api-key` directly. See upstream_headers construction
+    # in `messages()` below for the precedence rule when both are set.
+    anthropic_auth_token: Optional[str] = None
+    # Anthropic-shaped upstream base URL. Doubles as the internal-gateway
+    # override: point this at an org's approved AI gateway instead of
+    # api.anthropic.com directly. Deliberately NOT silently bypassable --
+    # there is no separate "gateway mode" flag, just this URL plus
+    # whichever credential (API key or bearer token) that gateway expects.
     anthropic_base_url: str = DEFAULT_ANTHROPIC_BASE_URL
     openai_api_key: Optional[str] = None
     openai_base_url: str = DEFAULT_OPENAI_BASE_URL
+    # Opt-in only, never defaults to True -- see create_app's lifespan,
+    # which logs a loud warning whenever this is enabled. Applies to BOTH
+    # the Anthropic and OpenAI upstream paths, since both share the one
+    # httpx.AsyncClient constructed in create_app.
+    upstream_skip_tls_verify: bool = False
     vault_manager: Optional[VaultManager] = None
     override_store: Optional[OverrideStore] = None
     audit_log: Optional[Any] = None
@@ -370,9 +394,14 @@ class ChatProxyConfig:
     def from_env(cls) -> "ChatProxyConfig":
         return cls(
             anthropic_api_key=os.environ.get("ANTHROPIC_API_KEY"),
+            anthropic_auth_token=os.environ.get("ANTHROPIC_AUTH_TOKEN"),
+            # DECOY_ANTHROPIC_UPSTREAM_URL already existed and already does
+            # what a "DECOY_UPSTREAM_BASE_URL" would -- reused rather than
+            # adding a second, redundant env var name for the same field.
             anthropic_base_url=os.environ.get("DECOY_ANTHROPIC_UPSTREAM_URL", DEFAULT_ANTHROPIC_BASE_URL),
             openai_api_key=os.environ.get("OPENAI_API_KEY"),
             openai_base_url=os.environ.get("DECOY_OPENAI_UPSTREAM_URL", DEFAULT_OPENAI_BASE_URL),
+            upstream_skip_tls_verify=_env_flag("DECOY_UPSTREAM_SKIP_TLS_VERIFY"),
         )
 
 
@@ -407,7 +436,18 @@ def create_app(config: Optional[ChatProxyConfig] = None):
 
     @contextlib.asynccontextmanager
     async def lifespan(_app):
-        state["client"] = httpx.AsyncClient(timeout=config.request_timeout_seconds, transport=config.httpx_transport)
+        if config.upstream_skip_tls_verify:
+            logger.warning(
+                "chat proxy started with DECOY_UPSTREAM_SKIP_TLS_VERIFY enabled -- TLS certificate "
+                "verification is OFF for all outbound upstream requests. This is a real security "
+                "tradeoff for a proxy that also handles sensitive data; only use this against a "
+                "trusted internal gateway behind SSL inspection, never against the public internet."
+            )
+        state["client"] = httpx.AsyncClient(
+            timeout=config.request_timeout_seconds,
+            transport=config.httpx_transport,
+            verify=not config.upstream_skip_tls_verify,
+        )
         if vault_manager.persist:
             logger.info("chat proxy started with DECOY_VAULT_PERSIST enabled (vault_path=%s)", vault_manager.vault_path)
         else:
@@ -430,9 +470,18 @@ def create_app(config: Optional[ChatProxyConfig] = None):
 
     async def messages(request):
         """POST /v1/messages -- Anthropic shape."""
-        if not config.anthropic_api_key:
+        if not config.anthropic_api_key and not config.anthropic_auth_token:
             return JSONResponse(
-                {"type": "error", "error": {"type": "authentication_error", "message": "decoy-proxy: ANTHROPIC_API_KEY is not set on the proxy's own machine/environment"}},
+                {
+                    "type": "error",
+                    "error": {
+                        "type": "authentication_error",
+                        "message": (
+                            "decoy-proxy: neither ANTHROPIC_API_KEY nor ANTHROPIC_AUTH_TOKEN is set "
+                            "on the proxy's own machine/environment"
+                        ),
+                    },
+                },
                 status_code=500,
             )
 
@@ -449,10 +498,20 @@ def create_app(config: Optional[ChatProxyConfig] = None):
         )
 
         upstream_headers = {
-            "x-api-key": config.anthropic_api_key,
             "anthropic-version": request.headers.get("anthropic-version", ANTHROPIC_VERSION_HEADER),
             "content-type": "application/json",
         }
+        # Precedence: anthropic_auth_token wins over anthropic_api_key when
+        # both are set. Rationale: a bearer token is the deliberate,
+        # explicit choice needed to route through an internal gateway
+        # (ANTHROPIC_AUTH_TOKEN, matching Claude Code's own env var name for
+        # this); a leftover ANTHROPIC_API_KEY in the environment should
+        # never silently override that and send requests to the wrong
+        # upstream shape/destination.
+        if config.anthropic_auth_token:
+            upstream_headers["authorization"] = f"Bearer {config.anthropic_auth_token}"
+        else:
+            upstream_headers["x-api-key"] = config.anthropic_api_key
         client: httpx.AsyncClient = state["client"]
 
         if masked_body.get("stream"):
@@ -476,7 +535,15 @@ def create_app(config: Optional[ChatProxyConfig] = None):
         return JSONResponse(unmasked)
 
     async def chat_completions(request):
-        """POST /v1/chat/completions -- OpenAI shape."""
+        """POST /v1/chat/completions -- OpenAI shape.
+
+        No auth_token/api_key duality needed here (unlike messages()
+        above): OpenAI's own protocol already authenticates via
+        `Authorization: Bearer <key>`, so an internal gateway expecting
+        bearer auth needs no separate credential field on this path --
+        just openai_base_url pointed at it. upstream_skip_tls_verify
+        applies here too, since both routes share one httpx.AsyncClient
+        (see create_app's lifespan)."""
         if not config.openai_api_key:
             return JSONResponse(
                 {"error": {"type": "authentication_error", "message": "decoy-proxy: OPENAI_API_KEY is not set on the proxy's own machine/environment"}},

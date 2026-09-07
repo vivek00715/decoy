@@ -285,6 +285,216 @@ def test_missing_api_key_returns_clean_error_not_a_crash(vault_manager, override
     assert "ANTHROPIC_API_KEY" in resp.json()["error"]["message"]
 
 
+def test_missing_credentials_error_names_both_api_key_and_auth_token(vault_manager, override_store):
+    """Neither anthropic_api_key nor anthropic_auth_token set -- the error
+    must name both env vars, not just the old ANTHROPIC_API_KEY-only one,
+    so an org running gateway mode isn't misled into setting the wrong
+    credential."""
+    config = ChatProxyConfig(
+        anthropic_api_key=None, anthropic_auth_token=None, vault_manager=vault_manager, override_store=override_store
+    )
+    app = create_app(config)
+    with TestClient(app) as client:
+        resp = client.post("/v1/messages", json={"model": "x", "messages": []})
+    assert resp.status_code == 500
+    message = resp.json()["error"]["message"]
+    assert "ANTHROPIC_API_KEY" in message
+    assert "ANTHROPIC_AUTH_TOKEN" in message
+
+
+# --------------------------------------------------------------------------
+# Internal AI gateway mode: ANTHROPIC_AUTH_TOKEN -> Authorization: Bearer,
+# against a mock gateway server standing in for a real internal gateway
+# (never the user's real org gateway -- see this file's module docstring
+# on the ASGITransport pattern used throughout: a real ASGI app, driven
+# through real HTTP/SSE machinery, just not real network I/O).
+# --------------------------------------------------------------------------
+
+
+def _mock_gateway_app(received_headers: dict):
+    """A minimal ASGI app standing in for an internal AI gateway's
+    POST /v1/messages endpoint: records whatever auth header it actually
+    received (so the test can assert on it) and returns a minimal
+    valid-shaped Anthropic response."""
+    from starlette.applications import Starlette
+    from starlette.responses import JSONResponse
+    from starlette.routing import Route
+
+    async def handle(request):
+        received_headers.update(dict(request.headers))
+        body = await request.json()
+        return JSONResponse(
+            {
+                "id": "msg_gateway_test",
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "text", "text": "ok"}],
+                "model": body.get("model"),
+                "stop_reason": "end_turn",
+            }
+        )
+
+    return Starlette(routes=[Route("/v1/messages", handle, methods=["POST"])])
+
+
+def test_v1_messages_sends_bearer_auth_when_auth_token_is_set_not_x_api_key(vault_manager, override_store):
+    import httpx
+
+    received_headers: dict = {}
+    fake_gateway = _mock_gateway_app(received_headers)
+
+    config = ChatProxyConfig(
+        anthropic_api_key=None,
+        anthropic_auth_token="fake-gateway-bearer-token",
+        anthropic_base_url="https://mock-internal-gateway.invalid",
+        vault_manager=vault_manager,
+        override_store=override_store,
+        httpx_transport=httpx.ASGITransport(app=fake_gateway),
+    )
+    app = create_app(config)
+
+    with TestClient(app) as client:
+        resp = client.post(
+            "/v1/messages",
+            json={"model": "claude-haiku-4-5", "max_tokens": 10, "messages": [{"role": "user", "content": "hi"}]},
+        )
+
+    assert resp.status_code == 200
+    assert received_headers.get("authorization") == "Bearer fake-gateway-bearer-token"
+    assert "x-api-key" not in received_headers
+
+
+def test_v1_messages_prefers_auth_token_over_api_key_when_both_are_set(vault_manager, override_store):
+    """Documented precedence rule (see ChatProxyConfig.anthropic_auth_token's
+    docstring and the upstream_headers construction in messages()): the
+    bearer token wins so a leftover ANTHROPIC_API_KEY never silently
+    overrides a deliberately-configured gateway token."""
+    import httpx
+
+    received_headers: dict = {}
+    fake_gateway = _mock_gateway_app(received_headers)
+
+    config = ChatProxyConfig(
+        anthropic_api_key="should-not-be-used",
+        anthropic_auth_token="should-win",
+        anthropic_base_url="https://mock-internal-gateway.invalid",
+        vault_manager=vault_manager,
+        override_store=override_store,
+        httpx_transport=httpx.ASGITransport(app=fake_gateway),
+    )
+    app = create_app(config)
+
+    with TestClient(app) as client:
+        resp = client.post(
+            "/v1/messages",
+            json={"model": "claude-haiku-4-5", "max_tokens": 10, "messages": [{"role": "user", "content": "hi"}]},
+        )
+
+    assert resp.status_code == 200
+    assert received_headers.get("authorization") == "Bearer should-win"
+    assert "x-api-key" not in received_headers
+
+
+def test_v1_messages_still_sends_x_api_key_when_no_auth_token_is_set(vault_manager, override_store):
+    """No-regression check: the existing ANTHROPIC_API_KEY path is
+    unchanged when ANTHROPIC_AUTH_TOKEN is not configured."""
+    import httpx
+
+    received_headers: dict = {}
+    fake_gateway = _mock_gateway_app(received_headers)
+
+    config = ChatProxyConfig(
+        anthropic_api_key="real-style-api-key",
+        anthropic_auth_token=None,
+        vault_manager=vault_manager,
+        override_store=override_store,
+        httpx_transport=httpx.ASGITransport(app=fake_gateway),
+    )
+    app = create_app(config)
+
+    with TestClient(app) as client:
+        resp = client.post(
+            "/v1/messages",
+            json={"model": "claude-haiku-4-5", "max_tokens": 10, "messages": [{"role": "user", "content": "hi"}]},
+        )
+
+    assert resp.status_code == 200
+    assert received_headers.get("x-api-key") == "real-style-api-key"
+    assert "authorization" not in received_headers
+
+
+def test_chat_proxy_config_from_env_reads_anthropic_auth_token(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "from-env-token")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    config = ChatProxyConfig.from_env()
+    assert config.anthropic_auth_token == "from-env-token"
+
+
+# --------------------------------------------------------------------------
+# Opt-in outbound TLS verification skip
+# --------------------------------------------------------------------------
+
+
+def test_upstream_skip_tls_verify_defaults_to_false(vault_manager, override_store, monkeypatch):
+    import httpx
+
+    captured_kwargs = {}
+    original_init = httpx.AsyncClient.__init__
+
+    def capturing_init(self, *args, **kwargs):
+        captured_kwargs.update(kwargs)
+        return original_init(self, *args, **kwargs)
+
+    monkeypatch.setattr(httpx.AsyncClient, "__init__", capturing_init)
+
+    config = ChatProxyConfig(anthropic_api_key="k", vault_manager=vault_manager, override_store=override_store)
+    app = create_app(config)
+    with TestClient(app):
+        pass
+
+    assert config.upstream_skip_tls_verify is False
+    assert captured_kwargs.get("verify") is True
+
+
+def test_upstream_skip_tls_verify_when_explicitly_enabled_disables_verification_and_warns(
+    vault_manager, override_store, monkeypatch, caplog
+):
+    import logging
+
+    import httpx
+
+    captured_kwargs = {}
+    original_init = httpx.AsyncClient.__init__
+
+    def capturing_init(self, *args, **kwargs):
+        captured_kwargs.update(kwargs)
+        return original_init(self, *args, **kwargs)
+
+    monkeypatch.setattr(httpx.AsyncClient, "__init__", capturing_init)
+
+    config = ChatProxyConfig(
+        anthropic_api_key="k",
+        vault_manager=vault_manager,
+        override_store=override_store,
+        upstream_skip_tls_verify=True,
+    )
+    app = create_app(config)
+    with caplog.at_level(logging.WARNING):
+        with TestClient(app):
+            pass
+
+    assert captured_kwargs.get("verify") is False
+    assert any("TLS" in record.message and "DECOY_UPSTREAM_SKIP_TLS_VERIFY" in record.message for record in caplog.records)
+
+
+def test_chat_proxy_config_from_env_skip_tls_verify_defaults_off_and_is_opt_in(monkeypatch):
+    monkeypatch.delenv("DECOY_UPSTREAM_SKIP_TLS_VERIFY", raising=False)
+    assert ChatProxyConfig.from_env().upstream_skip_tls_verify is False
+
+    monkeypatch.setenv("DECOY_UPSTREAM_SKIP_TLS_VERIFY", "true")
+    assert ChatProxyConfig.from_env().upstream_skip_tls_verify is True
+
+
 def test_v1_messages_streaming_end_to_end_reassembles_a_split_fake_correctly(vault_manager, override_store):
     """Real SSE, real HTTP layer, real fake upstream that deliberately
     splits the echoed (fake) value across two content_block_delta events
