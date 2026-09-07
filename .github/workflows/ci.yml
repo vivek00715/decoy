@@ -43,6 +43,15 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+      # CONFIRMED FINDING, round 2: bumping pyproject.toml's build-system
+      # `requires` floor alone did NOT fix pip-audit's setuptools finding
+      # (re-ran and it still failed, same 79.0.1) -- that floor only
+      # governs the ISOLATED build backend environment PEP 517 uses to
+      # build the wheel, not the ambient/outer environment `pip-audit`
+      # actually scans (this runner's own preinstalled setuptools, which
+      # setup-python@v5 does not upgrade on its own).
+      - name: Upgrade pip/setuptools (ambient env -- see comment above on why the pyproject.toml floor alone wasn't enough)
+        run: pip install --upgrade pip "setuptools>=83.0.0"
       - name: Install package + dev/llm/mcp extras
         run: pip install -e ".[dev,llm,mcp]"
       - name: Run test suite
