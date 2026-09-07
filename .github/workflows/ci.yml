@@ -25,6 +25,16 @@ jobs:
   python:
     name: Python (tests, benchmark suite, dependency scan)
     strategy:
+      # CONFIRMED FINDING from this project's first real CI run: without
+      # this, one matrix leg failing (ubuntu-latest's pip-audit finding)
+      # cancelled the still-running macos-latest/windows-latest legs
+      # ("The operation was canceled") BEFORE they could report their own
+      # real pass/fail status -- macos-latest had, in fact, already passed
+      # all 118 tests at the moment it was cancelled, which the Actions UI
+      # then misleadingly presented as a same-shaped "X" failure
+      # indistinguishable from a real per-OS bug. fail-fast: false ensures
+      # every OS always reports its own genuine result.
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
@@ -50,19 +60,39 @@ jobs:
   vscode-extension:
     name: VS Code extension (compile, lint, tests, dependency scan)
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: vscode-extension
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      # CONFIRMED FINDING from this project's first real CI run:
+      # chatProxyManager.test.ts spawns a REAL `python -m decoy.cli
+      # chat-proxy` subprocess (see that file's own module docstring --
+      # deliberately not mocked) and needs the `decoy` package with its
+      # chat-proxy extra (starlette/uvicorn/httpx) actually installed and
+      # importable, exactly the same requirement this project's own
+      # local-dev convention (`DECOY_TEST_PYTHON=.venv/bin/python`)
+      # exists to satisfy. Without this, those 3 tests failed on CI with
+      # ECONNREFUSED/"exited unexpectedly (code=1)" -- a real gap in the
+      # CI config, not a code bug (locally this was always run against a
+      # venv that already had these extras installed).
+      - name: Install decoy package with chat-proxy extra (for chatProxyManager.test.ts's real subprocess tests)
+        run: pip install -e ".[chat-proxy]"
       - run: npm install
+        working-directory: vscode-extension
       - run: npm run compile
+        working-directory: vscode-extension
       - run: npm run lint
+        working-directory: vscode-extension
       - run: npm test
+        working-directory: vscode-extension
+        env:
+          DECOY_TEST_PYTHON: python
       - run: npm audit
+        working-directory: vscode-extension
 
   intellij-plugin-core:
     name: IntelliJ plugin core module (pure Kotlin, no SDK download)

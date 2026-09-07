@@ -48,7 +48,14 @@ build = ["pyinstaller==6.22.2"]
 decoy = "decoy.cli:main"
 
 [build-system]
-requires = ["setuptools>=68"]
+# >=83 (not the previous >=68) -- CONFIRMED FINDING from this project's
+# first real CI run: an unpinned floor let pip resolve 79.0.1, which
+# `pip-audit` (running for real on GitHub's infra, not locally) flagged
+# as PYSEC-2026-3447, fixed in 83.0.0. Bumping the floor here is the fix,
+# not just noting it -- an unpinned build-backend dependency is exactly
+# the kind of gap that stays invisible until a real, independent CI run
+# actually checks it.
+requires = ["setuptools>=83.0.0"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
